@@ -1,0 +1,19 @@
+[project]
+name = "dabshell"
+version = "0.0.1"
+
+description = "Custom shell and terminal multiplexer"
+authors = [
+    {name="Damian Brunold", email="damian.brunold@gd.zh.ch"}
+]
+requires-python = ">=3.11"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[project.scripts]
+dsh = "dabshell:dabshell"
+
+[build-system]
+requires = ["setuptools"]
+build-backend = "setuptools.build_meta"
