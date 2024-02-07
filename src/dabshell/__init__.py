@@ -51,13 +51,6 @@ KEY_CTRL_Y = -125
 KEY_CTRL_Z = -126
 
 
-cwd = "."
-
-history = []
-history_index = -1
-history_current = ""
-
-
 class RawInput:
     def __init__(self):
         self.iswin = IS_WIN
@@ -117,92 +110,6 @@ class RawInput:
             )
 
 
-def dabshell():
-    global history
-    global history_index
-    global history_current
-    esc = "\u001b"
-    os.system("")
-    inp = RawInput()
-    outp = sys.stdout
-    outp.write("> ")
-    outp.flush()
-    line = ""
-    indent = 2
-    index = 0
-    log = False
-    while True:
-        key = inp.getch()
-        if key == KEY_CTRL_C:
-            break
-        elif key == KEY_LF or key == KEY_CR:
-            if re.match("^![0-9]+$", line):
-                hidx = int(line[1:])
-                if 0 <= hidx <= len(history)-1:
-                    line = history[hidx]
-                    index = len(line)
-            else:
-                print()
-                execute(line)
-                outp.write("> ")
-                outp.flush()
-                line = ""
-                index = 0
-        elif key == KEY_ESC:
-            line = ""
-            index = 0
-        elif key == KEY_BACKSPACE:
-            if index > 0:
-                line = line[:index-1] + line[index:]
-                index -= 1
-        elif key == KEY_LEFT:
-            index = max(0, index-1)
-        elif key == KEY_RIGHT:
-            index = min(len(line), index+1)
-        elif key == KEY_DELETE:
-            if index < len(line):
-                line = line[:index] + line[index+1:]
-        elif key == KEY_HOME:
-            index = 0
-        elif key == KEY_END:
-            index = len(line)
-        elif key == KEY_PAGEDOWN:
-            index = len(line)
-        elif key == KEY_PAGEUP:
-            index = 0
-        elif key == KEY_UP:
-            if history:
-                if history_index == -1:
-                    history_current = line
-                    history_index = len(history)-1
-                    line = history[history_index]
-                elif history_index > 0:
-                    history_index -= 1
-                    line = history[history_index]
-        elif key == KEY_DOWN:
-            if history and history_index != -1:
-                if history_index < len(history)-1:
-                    history_index += 1
-                    line = history[history_index]
-                else:
-                    line = history_current
-                    history_index = -1
-                    history_current = ""
-        elif type(key) == str:
-            line = line[:index] + key + line[index:]
-            index += 1
-
-        # Print current input-string
-        outp.write(f"{esc}[1000D")  # Move all the way left
-        outp.write("> " + line)
-        outp.write(f"{esc}[0K")
-        if index < len(line):
-            outp.write(f"{esc}[1000D")  # Move all the way left
-            pos = indent + index
-            outp.write(f"{esc}[{pos}C")  # Move cursor to index
-        outp.flush()
-
-
 def find_executable(executable):
     if IS_WIN:
         venv = "venv/Scripts"
@@ -226,107 +133,240 @@ def split_command(line):
     return parts[0], parts[1:]
 
 
-def cmd_ls(args):
-    if len(args) == 0:
-        path = cwd
-    else:
-        path = args[0]
-    for fname in os.listdir(path):
-        print(fname)
+class Dabshell:
+    def __init__(self):
+        self.cwd = "."
+        self.history = []
+        self.history_index = -1
+        self.history_current = ""
+        os.system("")
+        self.inp = RawInput()
+        self.outp = sys.stdout
+        self.line = ""
+        self.prompt = "> "
+        self.index = 0
+        self.log = False
 
+    def run(self):
+        esc = "\u001b"
+        self.outp.write(self.prompt)
+        self.outp.flush()
+        while True:
+            key = self.inp.getch()
+            if key == KEY_CTRL_C:
+                break
+            elif key == KEY_LF or key == KEY_CR:
+                if re.match("^![0-9]+$", self.line):
+                    hidx = int(self.line[1:])
+                    if 0 <= hidx <= len(self.history)-1:
+                        self.line = self.history[hidx]
+                        self.index = len(self.line)
+                else:
+                    print()
+                    self.execute(self.line)
+                    self.outp.write(self.prompt)
+                    self.outp.flush()
+                    self.line = ""
+                    self.index = 0
+            elif key == KEY_ESC:
+                self.line = ""
+                self.index = 0
+                self.history_index = -1
+                self.history_current = ""
+            elif key == KEY_BACKSPACE:
+                if self.index > 0:
+                    pre = self.line[:self.index-1]
+                    post = self.line[self.index:]
+                    self.line = pre + post
+                    self.index -= 1
+            elif key == KEY_LEFT:
+                self.index = max(0, self.index-1)
+            elif key == KEY_RIGHT:
+                self.index = min(len(self.line), self.index+1)
+            elif key == KEY_DELETE:
+                if self.index < len(self.line):
+                    pre = self.line[:self.index]
+                    post = self.line[self.index+1:]
+                    self.line = pre + post
+            elif key == KEY_HOME:
+                self.index = 0
+            elif key == KEY_END:
+                self.index = len(self.line)
+            elif key == KEY_UP:
+                if self.history:
+                    if self.history_index == -1:
+                        self.history_current = self.line
+                        self.history_index = len(self.history)-1
+                        self.line = self.history[self.history_index]
+                    elif self.history_index > 0:
+                        self.history_index -= 1
+                        self.line = self.history[self.history_index]
+            elif key == KEY_DOWN:
+                if self.history and self.history_index != -1:
+                    if self.history_index < len(self.history)-1:
+                        self.history_index += 1
+                        self.line = self.history[self.history_index]
+                    else:
+                        self.line = self.history_current
+                        self.history_index = -1
+                        self.history_current = ""
+            elif type(key) == str:
+                pre = self.line[:self.index]
+                post = self.line[self.index:]
+                self.line = pre + key + post
+                self.index += 1
 
-def cmd_cd(args):
-    global cwd
-    if len(args) == 0:
-        cwd = "."
-    else:
-        path = args[0]
-        if os.path.isabs(path):
-            cwd = path
+            self.outp.write(f"{esc}[1000D")  # Move all the way left
+            self.outp.write(self.prompt + self.line)
+            self.outp.write(f"{esc}[0K")
+            if self.index < len(self.line):
+                self.outp.write(f"{esc}[1000D")  # Move all the way left
+                pos = len(self.prompt) + self.index
+                self.outp.write(f"{esc}[{pos}C")  # Move cursor to index
+            self.outp.flush()
+
+    def cmd_ls(self, args):
+        if len(args) == 0:
+            path = self.cwd
         else:
-            cwd = os.path.normpath(os.path.join(cwd, path))
+            path = args[0]
+        for fname in os.listdir(path):
+            print(fname)
 
-
-def cmd_cwd(args):
-    print(cwd)
-
-
-def cmd_cat(args):
-    for filename in args:
-        if not os.path.isabs(filename):
-            filename = os.path.normpath(os.path.join(cwd, filename))
-        if os.path.exists(filename):
-            with open(filename, encoding="utf_8") as infile:
-                for line in infile:
-                    print(line, end="")
-
-
-def cmd_tail(args):
-    n = 20
-    filenames = []
-    after_args = False
-    for arg in args:
-        if not after_args and (arg.startswith("-") or arg.startswith("--")):
-            if arg == "--":
-                after_args = True
-            elif arg.startswith("-n="):
-                n = int(arg[len("-n="):])
-            elif arg.startwith("--lines="):
-                n = int(arg[len("--lines=")])
+    def cmd_cd(self, args):
+        if len(args) == 0:
+            self.cwd = "."
         else:
-            filenames.append(arg)
+            path = args[0]
+            if os.path.isabs(path):
+                self.cwd = path
+            else:
+                self.cwd = os.path.normpath(os.path.join(self.cwd, path))
 
-    for filename in filenames:
-        if not os.path.isabs(filename):
-            filename = os.path.normpath(os.path.join(cwd, filename))
-        if os.path.exists(filename):
-            with open(filename, encoding="utf_8") as infile:
-                # TODO for now, we read everything, later, optimize
-                lines = infile.readlines()
-                for line in lines[-n:]:
-                    print(line, end="")
+    def cmd_cwd(self, args):
+        print(self.cwd)
 
+    def cmd_cat(self, args):
+        for filename in args:
+            if not os.path.isabs(filename):
+                filename = os.path.normpath(os.path.join(self.cwd, filename))
+            if os.path.exists(filename):
+                with open(filename, encoding="utf_8") as infile:
+                    for line in infile:
+                        print(line, end="")
 
-def cmd_history(args):
-    if not args:
-        for index, line in enumerate(history):
-            print(index, line)
-    else:
-        query = args[0].lower()
-        for index, line in enumerate(history):
-            if line.lower().find(query) != -1:
+    def cmd_tail(self, args):
+        n = 20
+        filenames = []
+        after_args = False
+        idx = 0
+        while idx < len(args):
+            arg = args[idx]
+            if (
+                not after_args
+                and (arg.startswith("-") or arg.startswith("--"))
+            ):
+                if arg == "--":
+                    after_args = True
+                elif arg == "-n":
+                    n = int(args[idx+1])
+                    idx += 1
+                elif arg.startswith("--lines="):
+                    n = int(arg[len("--lines=")])
+            else:
+                filenames.append(arg)
+            idx += 1
+
+        for filename in filenames:
+            if not os.path.isabs(filename):
+                filename = os.path.normpath(os.path.join(self.cwd, filename))
+            if os.path.exists(filename):
+                with open(filename, encoding="utf_8") as infile:
+                    # TODO for now, we read everything, later, optimize
+                    lines = infile.readlines()
+                    for line in lines[-n:]:
+                        print(line, end="")
+
+    def cmd_head(self, args):
+        n = 20
+        filenames = []
+        after_args = False
+        idx = 0
+        while idx < len(args):
+            arg = args[idx]
+            if (
+                not after_args
+                and (arg.startswith("-") or arg.startswith("--"))
+            ):
+                if arg == "--":
+                    after_args = True
+                elif arg == "-n":
+                    n = int(args[idx+1])
+                    idx += 1
+                elif arg.startswith("--lines="):
+                    n = int(arg[len("--lines=")])
+            else:
+                filenames.append(arg)
+            idx += 1
+
+        for filename in filenames:
+            if not os.path.isabs(filename):
+                filename = os.path.normpath(os.path.join(self.cwd, filename))
+            if os.path.exists(filename):
+                with open(filename, encoding="utf_8") as infile:
+                    for i in range(n):
+                        line = infile.readline()
+                        if not line:
+                            break
+                        print(line, end="")
+
+    def cmd_history(self, args):
+        if not args:
+            for index, line in enumerate(self.history):
                 print(index, line)
+        else:
+            query = args[0].lower()
+            for index, line in enumerate(self.history):
+                if line.lower().find(query) != -1:
+                    print(index, line)
+
+    def execute(self, line):
+        cmd, args = split_command(line)
+        if cmd != "history":
+            self.history.append(line)
+        if self.log:
+            print("::", cmd, args)
+        if cmd == "ls":
+            self.cmd_ls(args)
+        elif cmd == "cd":
+            self.cmd_cd(args)
+        elif cmd == "cwd":
+            self.cmd_cwd(args)
+        elif cmd == "cat":
+            self.cmd_cat(args)
+        elif cmd == "tail":
+            self.cmd_tail(args)
+        elif cmd == "head":
+            self.cmd_head(args)
+        elif cmd == "history":
+            self.cmd_history(args)
+        else:
+            try:
+                executable = find_executable(cmd)
+                if self.log:
+                    print("::", executable)
+                subprocess.run(
+                    [
+                        executable,
+                        *args,
+                    ],
+                )
+            except Exception as e:
+                print(e)
 
 
-def execute(line):
-    if not line.startswith("history "):
-        history.append(line)
-    cmd, args = split_command(line)
-    print("::", cmd, args)
-    if cmd == "ls":
-        cmd_ls(args)
-    elif cmd == "cd":
-        cmd_cd(args)
-    elif cmd == "cwd":
-        cmd_cwd(args)
-    elif cmd == "cat":
-        cmd_cat(args)
-    elif cmd == "tail":
-        cmd_tail(args)
-    elif cmd == "history":
-        cmd_history(args)
-    else:
-        try:
-            executable = find_executable(cmd)
-            print("::", executable)
-            subprocess.run(
-                [
-                    executable,
-                    *args,
-                ],
-            )
-        except Exception as e:
-            print(e)
+def dabshell():
+    Dabshell().run()
 
 
 if __name__ == "__main__":
