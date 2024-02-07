@@ -1,5 +1,6 @@
 import os
 import platform
+import re
 import subprocess
 import sys
 
@@ -48,6 +49,13 @@ KEY_CTRL_W = -123
 KEY_CTRL_X = -124
 KEY_CTRL_Y = -125
 KEY_CTRL_Z = -126
+
+
+cwd = "."
+
+history = []
+history_index = -1
+history_current = ""
 
 
 class RawInput:
@@ -110,6 +118,9 @@ class RawInput:
 
 
 def dabshell():
+    global history
+    global history_index
+    global history_current
     esc = "\u001b"
     os.system("")
     inp = RawInput()
@@ -125,12 +136,18 @@ def dabshell():
         if key == KEY_CTRL_C:
             break
         elif key == KEY_LF or key == KEY_CR:
-            print()
-            execute(line)
-            outp.write("> ")
-            outp.flush()
-            line = ""
-            index = 0
+            if re.match("^![0-9]+$", line):
+                hidx = int(line[1:])
+                if 0 <= hidx <= len(history)-1:
+                    line = history[hidx]
+                    index = len(line)
+            else:
+                print()
+                execute(line)
+                outp.write("> ")
+                outp.flush()
+                line = ""
+                index = 0
         elif key == KEY_ESC:
             line = ""
             index = 0
@@ -153,6 +170,24 @@ def dabshell():
             index = len(line)
         elif key == KEY_PAGEUP:
             index = 0
+        elif key == KEY_UP:
+            if history:
+                if history_index == -1:
+                    history_current = line
+                    history_index = len(history)-1
+                    line = history[history_index]
+                elif history_index > 0:
+                    history_index -= 1
+                    line = history[history_index]
+        elif key == KEY_DOWN:
+            if history and history_index != -1:
+                if history_index < len(history)-1:
+                    history_index += 1
+                    line = history[history_index]
+                else:
+                    line = history_current
+                    history_index = -1
+                    history_current = ""
         elif type(key) == str:
             line = line[:index] + key + line[index:]
             index += 1
@@ -193,18 +228,93 @@ def split_command(line):
 
 def cmd_ls(args):
     if len(args) == 0:
-        path = "."
+        path = cwd
     else:
         path = args[0]
     for fname in os.listdir(path):
         print(fname)
 
 
+def cmd_cd(args):
+    global cwd
+    if len(args) == 0:
+        cwd = "."
+    else:
+        path = args[0]
+        if os.path.isabs(path):
+            cwd = path
+        else:
+            cwd = os.path.normpath(os.path.join(cwd, path))
+
+
+def cmd_cwd(args):
+    print(cwd)
+
+
+def cmd_cat(args):
+    for filename in args:
+        if not os.path.isabs(filename):
+            filename = os.path.normpath(os.path.join(cwd, filename))
+        if os.path.exists(filename):
+            with open(filename, encoding="utf_8") as infile:
+                for line in infile:
+                    print(line, end="")
+
+
+def cmd_tail(args):
+    n = 20
+    filenames = []
+    after_args = False
+    for arg in args:
+        if not after_args and (arg.startswith("-") or arg.startswith("--")):
+            if arg == "--":
+                after_args = True
+            elif arg.startswith("-n="):
+                n = int(arg[len("-n="):])
+            elif arg.startwith("--lines="):
+                n = int(arg[len("--lines=")])
+        else:
+            filenames.append(arg)
+
+    for filename in filenames:
+        if not os.path.isabs(filename):
+            filename = os.path.normpath(os.path.join(cwd, filename))
+        if os.path.exists(filename):
+            with open(filename, encoding="utf_8") as infile:
+                # TODO for now, we read everything, later, optimize
+                lines = infile.readlines()
+                for line in lines[-n:]:
+                    print(line, end="")
+
+
+def cmd_history(args):
+    if not args:
+        for index, line in enumerate(history):
+            print(index, line)
+    else:
+        query = args[0].lower()
+        for index, line in enumerate(history):
+            if line.lower().find(query) != -1:
+                print(index, line)
+
+
 def execute(line):
+    if not line.startswith("history "):
+        history.append(line)
     cmd, args = split_command(line)
     print("::", cmd, args)
     if cmd == "ls":
         cmd_ls(args)
+    elif cmd == "cd":
+        cmd_cd(args)
+    elif cmd == "cwd":
+        cmd_cwd(args)
+    elif cmd == "cat":
+        cmd_cat(args)
+    elif cmd == "tail":
+        cmd_tail(args)
+    elif cmd == "history":
+        cmd_history(args)
     else:
         try:
             executable = find_executable(cmd)
@@ -216,8 +326,6 @@ def execute(line):
                 ],
             )
         except Exception as e:
-            # TODO
-            print("Failed to run command")
             print(e)
 
 
