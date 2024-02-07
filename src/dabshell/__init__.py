@@ -1,6 +1,10 @@
 import os
-import sys
 import platform
+import subprocess
+import sys
+
+
+IS_WIN = platform.system() == "Windows"
 
 
 KEY_LEFT = -1
@@ -48,7 +52,7 @@ KEY_CTRL_Z = -126
 
 class RawInput:
     def __init__(self):
-        self.iswin = platform.system() == "Windows"
+        self.iswin = IS_WIN
         if self.iswin:
             import msvcrt
             self.msvcrt = msvcrt
@@ -106,10 +110,14 @@ class RawInput:
 
 
 def dabshell():
+    esc = "\u001b"
     os.system("")
     inp = RawInput()
     outp = sys.stdout
+    outp.write("> ")
+    outp.flush()
     line = ""
+    indent = 2
     index = 0
     log = False
     while True:
@@ -117,8 +125,10 @@ def dabshell():
         if key == KEY_CTRL_C:
             break
         elif key == KEY_LF or key == KEY_CR:
-            outp.write("\u001b[1000D")
-            print("\nechoing... ", line)
+            print()
+            execute(line)
+            outp.write("> ")
+            outp.flush()
             line = ""
             index = 0
         elif key == KEY_ESC:
@@ -148,14 +158,68 @@ def dabshell():
             index += 1
 
         # Print current input-string
-        outp.write("\u001b[1000D")  # Move all the way left
-        outp.write(line)
-        outp.write(u"\u001b[0K")
+        outp.write(f"{esc}[1000D")  # Move all the way left
+        outp.write("> " + line)
+        outp.write(f"{esc}[0K")
         if index < len(line):
-            outp.write("\u001b[1000D")  # Move all the way left
-            if index > 0:
-                outp.write("\u001b[" + str(index) + "C")  # Move cursor to index
+            outp.write(f"{esc}[1000D")  # Move all the way left
+            pos = indent + index
+            outp.write(f"{esc}[{pos}C")  # Move cursor to index
         outp.flush()
+
+
+def find_executable(executable):
+    if IS_WIN:
+        venv = "venv/Scripts"
+        if os.path.exists(os.path.join(venv, executable)):
+            return os.path.join(venv, executable)
+        if os.path.exists(os.path.join(venv, executable+".exe")):
+            return os.path.join(venv, executable+".exe")
+        # TODO search PATH
+        return executable
+    else:
+        venv = "venv/bin"
+        if os.path.exists(os.path.join(venv, executable)):
+            return os.path.join(venv, executable)
+        # TODO search PATH
+        return executable
+
+
+def split_command(line):
+    # TODO handle escapes and quotes
+    parts = line.split(" ")
+    return parts[0], parts[1:]
+
+
+def cmd_ls(args):
+    if len(args) == 0:
+        path = "."
+    else:
+        path = args[0]
+    for fname in os.listdir(path):
+        print(fname)
+
+
+def execute(line):
+    cmd, args = split_command(line)
+    print("::", cmd, args)
+    if cmd == "ls":
+        cmd_ls(args)
+    else:
+        try:
+            executable = find_executable(cmd)
+            print("::", executable)
+            subprocess.run(
+                [
+                    executable,
+                    *args,
+                ],
+            )
+        except Exception as e:
+            # TODO
+            print("Failed to run command")
+            print(e)
+
 
 if __name__ == "__main__":
     dabshell()
