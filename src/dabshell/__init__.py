@@ -3,10 +3,17 @@ import platform
 import re
 import subprocess
 import sys
+import time
 
 
 IS_WIN = platform.system() == "Windows"
 
+if IS_WIN:
+    import msvcrt
+else:
+    import tty
+    import termios
+    import select
 
 KEY_LEFT = -1
 KEY_RIGHT = -2
@@ -52,18 +59,8 @@ KEY_CTRL_Z = -126
 
 
 class RawInput:
-    def __init__(self):
-        self.iswin = IS_WIN
-        if self.iswin:
-            import msvcrt
-            self.msvcrt = msvcrt
-        else:
-            import tty
-            import termios
-            self.old_settings = termios.tcgetattr(sys.stdin)
-
     def getch(self):
-        if self.iswin:
+        if IS_WIN:
             ch = self.msvcrt.getwch()
             n = ord(ch)
             if n in [0x0, 0xe0]:
@@ -94,20 +91,60 @@ class RawInput:
             else:
                 return ch
         else:
-            # TODO parse codes...
-            return sys.stdin.read(1)
+            self.init()
+            try:
+                ch = sys.stdin.read(1)
+                n = ord(ch)
+                if n == 0x1b:
+                    ch = sys.stdin.read(1)
+                    n = ord(ch)
+                    if n == 0x1b:
+                        return KEY_ESC
+                    elif n == 0x5b:
+                        ch = sys.stdin.read(1)
+                        n = ord(ch)
+                        if n == 0x44: return KEY_LEFT
+                        elif n == 0x43: return KEY_RIGHT
+                        elif n == 0x41: return KEY_UP
+                        elif n == 0x42: return KEY_DOWN
+                        elif n == 0x48: return KEY_HOME
+                        elif n == 0x46: return KEY_END
+                        elif n == 0x33:
+                            sys.stdin.read(1)  # skip 0x7e
+                            return KEY_DELETE
+                        elif n == 0x35:
+                            sys.stdin.read(1)  # skip 0x7e
+                            return KEY_PAGEUP
+                        elif n == 0x36:
+                            sys.stdin.read(1)  # skip 0x7e
+                            return KEY_PAGEDOWN
+                        else:
+                            print(hex(n))
+                elif n == 0x7f:
+                    return KEY_BACKSPACE
+                elif n == 0x9:
+                    return KEY_TAB
+                elif n == 0xa:
+                    return KEY_LF
+                elif n == 0xd:
+                    return KEY_CR
+                elif n <= 26:
+                    return -100 - n  # implicitly map to KEY_CTRL_*
+                else:
+                    return ch
+            finally:
+                self.restore()
 
-    def __enter__(self):
+    def init(self):
+        self.old_settings = termios.tcgetattr(sys.stdin)
         tty.setraw(sys.stdin)
-        return self
 
-    def __exit__(self, type, value, traceback):
-        if not self.iswin:
-            termios.tcsetattr(
-                sys.stdin,
-                termios.TCSADRAIN,
-                self.old_settings,
-            )
+    def restore(self):
+        termios.tcsetattr(
+            sys.stdin,
+            termios.TCSADRAIN,
+            self.old_settings,
+        )
 
 
 def find_executable(executable):
