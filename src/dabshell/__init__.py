@@ -61,10 +61,10 @@ KEY_CTRL_Z = -126
 class RawInput:
     def getch(self):
         if IS_WIN:
-            ch = self.msvcrt.getwch()
+            ch = msvcrt.getwch()
             n = ord(ch)
             if n in [0x0, 0xe0]:
-                n = ord(self.msvcrt.getwch())
+                n = ord(msvcrt.getwch())
                 if n == 0x4b: return KEY_LEFT
                 elif n == 0x4d: return KEY_RIGHT
                 elif n == 0x48: return KEY_UP
