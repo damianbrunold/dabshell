@@ -216,6 +216,16 @@ class Dabshell:
                     post = self.line[self.index:]
                     self.line = pre + post
                     self.index -= 1
+            elif key == KEY_CTRL_W:
+                idx = self.index - 1
+                while idx > 0 and self.line[idx] == " ":
+                    idx -= 1
+                while idx > 0 and self.line[idx] != " ":
+                    idx -= 1
+                delta = self.index - idx
+                self.line = self.line[0:idx] + self.line[self.index:]
+                self.index -= delta
+                self.index = min(len(self.line), self.index)
             elif key == KEY_LEFT:
                 self.index = max(0, self.index-1)
             elif key == KEY_RIGHT:
