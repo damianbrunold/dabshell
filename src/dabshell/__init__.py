@@ -277,8 +277,9 @@ class Dabshell:
             path = self.cwd
         else:
             path = args[0]
-        for fname in os.listdir(path):
-            print(fname)
+        if os.path.exists(path):
+            for fname in os.listdir(path):
+                print(fname)
 
     def cmd_cd(self, args):
         if len(args) == 0:
@@ -290,7 +291,7 @@ class Dabshell:
             else:
                 self.cwd = os.path.normpath(os.path.join(self.cwd, path))
 
-    def cmd_cwd(self, args):
+    def cmd_pwd(self, args):
         print(self.cwd)
 
     def cmd_cat(self, args):
@@ -378,6 +379,7 @@ class Dabshell:
                     print(index, line)
 
     def execute(self, line):
+        line = line.strip()
         cmd, args = split_command(line)
         if cmd != "history":
             self.history.append(line)
@@ -387,8 +389,8 @@ class Dabshell:
             self.cmd_ls(args)
         elif cmd == "cd":
             self.cmd_cd(args)
-        elif cmd == "cwd":
-            self.cmd_cwd(args)
+        elif cmd == "pwd":
+            self.cmd_pwd(args)
         elif cmd == "cat":
             self.cmd_cat(args)
         elif cmd == "tail":
