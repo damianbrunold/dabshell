@@ -147,9 +147,9 @@ class RawInput:
         )
 
 
-def find_executable(executable):
+def find_executable(cwd, executable):
     if IS_WIN:
-        venv = "venv/Scripts"
+        venv = os.path.join(cwd, "venv/Scripts")
         if os.path.exists(os.path.join(venv, executable)):
             return os.path.join(venv, executable)
         if os.path.exists(os.path.join(venv, executable+".exe")):
@@ -157,7 +157,7 @@ def find_executable(executable):
         # TODO search PATH
         return executable
     else:
-        venv = "venv/bin"
+        venv = os.path.join(cwd, "venv/bin")
         if os.path.exists(os.path.join(venv, executable)):
             return os.path.join(venv, executable)
         # TODO search PATH
@@ -172,7 +172,7 @@ def split_command(line):
 
 class Dabshell:
     def __init__(self):
-        self.cwd = "."
+        self.cwd = self.canon(".")
         self.history = []
         self.history_index = -1
         self.history_current = ""
@@ -180,13 +180,18 @@ class Dabshell:
         self.inp = RawInput()
         self.outp = sys.stdout
         self.line = ""
-        self.prompt = "> "
         self.index = 0
         self.log = False
 
+    def prompt(self):
+        return self.cwd + "> "
+
+    def canon(self, path):
+        return os.path.normpath(os.path.abspath(path))
+
     def run(self):
         esc = "\u001b"
-        self.outp.write(self.prompt)
+        self.outp.write(self.prompt())
         self.outp.flush()
         while True:
             key = self.inp.getch()
@@ -201,7 +206,7 @@ class Dabshell:
                 else:
                     print()
                     self.execute(self.line)
-                    self.outp.write(self.prompt)
+                    self.outp.write(self.prompt())
                     self.outp.flush()
                     self.line = ""
                     self.index = 0
@@ -264,32 +269,35 @@ class Dabshell:
                 self.index += 1
 
             self.outp.write(f"{esc}[1000D")  # Move all the way left
-            self.outp.write(self.prompt + self.line)
+            self.outp.write(self.prompt() + self.line)
             self.outp.write(f"{esc}[0K")
             if self.index < len(self.line):
                 self.outp.write(f"{esc}[1000D")  # Move all the way left
-                pos = len(self.prompt) + self.index
+                pos = len(self.prompt()) + self.index
                 self.outp.write(f"{esc}[{pos}C")  # Move cursor to index
             self.outp.flush()
 
     def cmd_ls(self, args):
         if len(args) == 0:
-            path = self.cwd
+            path = self.canon(self.cwd)
         else:
-            path = args[0]
+            if os.path.isabs(args[0]):
+                path = self.canon(args[0])
+            else:
+                path = self.canon(os.path.join(self.cwd, args[0]))
         if os.path.exists(path):
             for fname in os.listdir(path):
                 print(fname)
 
     def cmd_cd(self, args):
         if len(args) == 0:
-            self.cwd = "."
+            self.cwd = self.canon(".")
         else:
             path = args[0]
             if os.path.isabs(path):
-                self.cwd = path
+                self.cwd = self.canon(path)
             else:
-                self.cwd = os.path.normpath(os.path.join(self.cwd, path))
+                self.cwd = self.canon(os.path.join(self.cwd, path))
 
     def cmd_pwd(self, args):
         print(self.cwd)
@@ -327,7 +335,7 @@ class Dabshell:
 
         for filename in filenames:
             if not os.path.isabs(filename):
-                filename = os.path.normpath(os.path.join(self.cwd, filename))
+                filename = self.canon(os.path.join(self.cwd, filename))
             if os.path.exists(filename):
                 with open(filename, encoding="utf_8") as infile:
                     # TODO for now, we read everything, later, optimize
@@ -359,7 +367,7 @@ class Dabshell:
 
         for filename in filenames:
             if not os.path.isabs(filename):
-                filename = os.path.normpath(os.path.join(self.cwd, filename))
+                filename = self.canon(os.path.join(self.cwd, filename))
             if os.path.exists(filename):
                 with open(filename, encoding="utf_8") as infile:
                     for i in range(n):
@@ -401,7 +409,7 @@ class Dabshell:
             self.cmd_history(args)
         else:
             try:
-                executable = find_executable(cmd)
+                executable = self.canon(find_executable(self.cwd, cmd))
                 if self.log:
                     print("::", executable)
                 subprocess.run(
@@ -409,7 +417,10 @@ class Dabshell:
                         executable,
                         *args,
                     ],
+                    cwd=self.cwd,
                 )
+            except KeyboardInterrupt:
+                pass
             except Exception as e:
                 print(e)
 
