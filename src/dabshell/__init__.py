@@ -204,7 +204,8 @@ class Dabshell:
                         self.index = len(self.line)
                 else:
                     print()
-                    self.execute(self.line)
+                    if not self.execute(self.line):
+                        break
                     self.outp.write(self.prompt())
                     self.outp.flush()
                     self.line = ""
@@ -406,6 +407,8 @@ class Dabshell:
             self.cmd_head(args)
         elif cmd == "history":
             self.cmd_history(args)
+        elif cmd == "exit":
+            return False
         else:
             try:
                 executable = self.canon(find_executable(self.cwd, cmd))
@@ -422,6 +425,7 @@ class Dabshell:
                 pass
             except Exception as e:
                 print(e)
+        return True
 
 
 def dabshell():
