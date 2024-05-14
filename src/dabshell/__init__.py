@@ -1,6 +1,7 @@
 import os
 import platform
 import re
+import shutil
 import subprocess
 import sys
 import time
@@ -154,14 +155,12 @@ def find_executable(cwd, executable):
             return os.path.join(venv, executable)
         if os.path.exists(os.path.join(venv, executable+".exe")):
             return os.path.join(venv, executable+".exe")
-        # TODO search PATH
-        return executable
+        return shutil.which(executable)
     else:
         venv = os.path.join(cwd, "venv/bin")
         if os.path.exists(os.path.join(venv, executable)):
             return os.path.join(venv, executable)
-        # TODO search PATH
-        return executable
+        return shutil.which(executable)
 
 
 def split_command(line):
