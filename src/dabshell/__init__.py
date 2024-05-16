@@ -488,6 +488,9 @@ class Dabshell:
             self.history_current = ""
         if self.log:
             print("::", cmd, args)
+        # trigger prompt info update
+        self.info_pythonproj_cwd = None
+        self.info_git_cwd = None
         if cmd == "ls":
             self.cmd_ls(args)
         elif cmd == "cd":
