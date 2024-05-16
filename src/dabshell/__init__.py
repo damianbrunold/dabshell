@@ -8,6 +8,8 @@ import time
 import tomllib
 
 
+esc = "\u001b"
+
 IS_WIN = platform.system() == "Windows"
 
 if IS_WIN:
@@ -223,9 +225,10 @@ class Dabshell:
             s += pyproj + " "
         branch, modified = self.info_git()
         if branch:
-            s += branch
             if modified:
-                s += "*"
+                s += f"{esc}[31m" + branch + "*" + f"{esc}[0m"
+            else:
+                s += f"{esc}[32m" + branch + f"{esc}[0m"
             s += " "
         return s + self.cwd + "> "
 
@@ -278,7 +281,6 @@ class Dabshell:
         return os.path.normpath(os.path.abspath(path))
 
     def run(self):
-        esc = "\u001b"
         self.outp.write(self.prompt())
         self.outp.flush()
         while True:
