@@ -5,6 +5,7 @@ import shutil
 import subprocess
 import sys
 import time
+import tomllib
 
 
 IS_WIN = platform.system() == "Windows"
@@ -210,9 +211,66 @@ class Dabshell:
         self.line = ""
         self.index = 0
         self.log = False
+        self.info_pythonproj_cwd = None
+        self.info_pythonproj_s = ""
+        self.info_git_cwd = None
+        self.info_git_s = ""
 
     def prompt(self):
-        return self.cwd + "> "
+        s = ""
+        pyproj = self.info_pythonproj()
+        if pyproj:
+            s += pyproj + " "
+        branch, modified = self.info_git()
+        if branch:
+            s += branch
+            if modified:
+                s += "*"
+            s += " "
+        return s + self.cwd + "> "
+
+    def info_pythonproj(self):
+        if self.info_pythonproj_cwd == self.cwd:
+            return self.info_pythonproj_s
+        self.info_pythonproj_cwd = self.cwd
+        self.info_pythonproj_s = ""
+        projfile = os.path.join(self.cwd, "pyproject.toml")
+        if os.path.exists(projfile):
+            with open(projfile, "rb") as infile:
+                cfg = tomllib.load(infile)
+                proj = cfg.get("project")
+                if proj:
+                    self.info_pythonproj_s = proj.get("version", "")
+        return self.info_pythonproj_s
+
+    def info_git(self):
+        if self.info_git_cwd == self.cwd:
+            return self.info_git_s
+        self.info_git_cwd = self.cwd
+        self.info_git_s = "", False
+        wd = self.cwd
+        while wd:
+            gitdir = os.path.join(wd, ".git")
+            if os.path.isdir(gitdir):
+                break
+            wd = os.path.dirname(wd)
+        else:
+            gitdir = None
+        if gitdir:
+            p = subprocess.run(
+                [
+                    shutil.which("git"),
+                    "status",
+                ],
+                capture_output=True,
+                cwd=self.cwd,
+            )
+            lines = p.stdout.decode("utf8").splitlines()
+            if lines:
+                branch = lines[0].split(" ")[2]
+                modified = lines[-1] != "nothing to commit, working tree clean"
+                self.info_git_s = branch, modified
+        return self.info_git_s
 
     def canon(self, path):
         if path is None:
