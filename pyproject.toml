@@ -1,6 +1,6 @@
 [project]
 name = "dabshell"
-version = "0.0.1"
+version = "0.0.2"
 
 description = "Custom shell and terminal multiplexer"
 authors = [

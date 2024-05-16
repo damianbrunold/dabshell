@@ -164,8 +164,37 @@ def find_executable(cwd, executable):
 
 
 def split_command(line):
-    # TODO handle escapes and quotes
-    parts = line.split(" ")
+    parts = []
+    current_part = ""
+    in_quote = False
+    for idx in range(len(line)):
+        ch = line[idx]
+        if ch == "\"" and not in_quote:
+            if current_part:
+                parts.append(current_part)
+                current_part = ""
+            in_quote = True
+        elif (
+            ch == "\\"
+            and idx < len(line) - 1
+            and line[idx+1] == "\""
+            and in_quote
+        ):
+            current_part += "\\"
+            idx += 1
+        elif ch =="\"" and in_quote:
+            in_quote = False
+            parts.append(current_part)
+            current_part = ""
+        elif ch == " " and not in_quote:
+            if current_part:
+                parts.append(current_part)
+                current_part = ""
+        else:
+            current_part += ch
+        idx += 1
+    if current_part:
+        parts.append(current_part)
     return parts[0], parts[1:]
 
 
@@ -186,6 +215,8 @@ class Dabshell:
         return self.cwd + "> "
 
     def canon(self, path):
+        if path is None:
+            return None
         return os.path.normpath(os.path.abspath(path))
 
     def run(self):
@@ -295,9 +326,13 @@ class Dabshell:
         else:
             path = args[0]
             if os.path.isabs(path):
-                self.cwd = self.canon(path)
+                cwd_ = self.canon(path)
             else:
-                self.cwd = self.canon(os.path.join(self.cwd, path))
+                cwd_ = self.canon(os.path.join(self.cwd, path))
+            if os.path.isdir(cwd_):
+                self.cwd = cwd_
+            else:
+                print(f"ERR: cannot cd to {cwd_}")
 
     def cmd_pwd(self, args):
         print(self.cwd)
@@ -391,6 +426,8 @@ class Dabshell:
         cmd, args = split_command(line)
         if cmd != "history":
             self.history.append(line)
+            self.history_index = -1
+            self.history_current = ""
         if self.log:
             print("::", cmd, args)
         if cmd == "ls":
@@ -412,15 +449,18 @@ class Dabshell:
         else:
             try:
                 executable = self.canon(find_executable(self.cwd, cmd))
-                if self.log:
-                    print("::", executable)
-                subprocess.run(
-                    [
-                        executable,
-                        *args,
-                    ],
-                    cwd=self.cwd,
-                )
+                if executable is None:
+                    print(f"ERR: {cmd} not found")
+                else:
+                    if self.log:
+                        print("::", executable)
+                    subprocess.run(
+                        [
+                            executable,
+                            *args,
+                        ],
+                        cwd=self.cwd,
+                    )
             except KeyboardInterrupt:
                 pass
             except Exception as e:
