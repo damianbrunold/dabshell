@@ -341,18 +341,22 @@ class Dabshell:
                         self.history_current = self.line
                         self.history_index = len(self.history)-1
                         self.line = self.history[self.history_index]
+                        self.index = len(self.line)
                     elif self.history_index > 0:
                         self.history_index -= 1
                         self.line = self.history[self.history_index]
+                        self.index = len(self.line)
             elif key == KEY_DOWN:
                 if self.history and self.history_index != -1:
                     if self.history_index < len(self.history)-1:
                         self.history_index += 1
                         self.line = self.history[self.history_index]
+                        self.index = len(self.line)
                     else:
                         self.line = self.history_current
                         self.history_index = -1
                         self.history_current = ""
+                        self.index = len(self.line)
             elif type(key) == str:
                 pre = self.line[:self.index]
                 post = self.line[self.index:]
@@ -360,11 +364,18 @@ class Dabshell:
                 self.index += 1
 
             self.outp.write(f"{esc}[1000D")  # Move all the way left
-            self.outp.write(self.prompt() + self.line)
+            current_prompt = self.prompt()
+            clean_prompt = (
+                current_prompt
+                .replace(f"{esc}[31m", "")
+                .replace(f"{esc}[32m", "")
+                .replace(f"{esc}[0m", "")
+            )
+            self.outp.write(current_prompt + self.line)
             self.outp.write(f"{esc}[0K")
             if self.index < len(self.line):
                 self.outp.write(f"{esc}[1000D")  # Move all the way left
-                pos = len(self.prompt()) + self.index
+                pos = len(clean_prompt) + self.index
                 self.outp.write(f"{esc}[{pos}C")  # Move cursor to index
             self.outp.flush()
 
@@ -483,6 +494,8 @@ class Dabshell:
 
     def execute(self, line):
         line = line.strip()
+        if not line:
+            return True
         cmd, args = split_command(line)
         if cmd != "history":
             self.history.append(line)
