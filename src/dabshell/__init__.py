@@ -276,6 +276,37 @@ def split_command(line):
     return parts[0], parts[1:]
 
 
+class Env:
+    def __init__(self):
+        self.mappings = {}
+        self.parent = None
+
+    def names(self):
+        result = list(self.mappings.keys())
+        if self.parent:
+            result += self.parent.names()
+        return result
+
+    def set(self, name, value):
+        self.mappings[name] = value
+
+    def update(self, name, value):
+        if name in self.mappings:
+            self.mappings[name] = value
+        if self.parent:
+            self.parent.update(name, value)
+        else:
+            raise ValueError(f"undefined variable {name}")
+
+    def get(self, name, default=None):
+        if name in self.mappings:
+            return self.mappings[name]
+        if self.parent:
+            return self.parent.get(name, default)
+        else:
+            return default
+
+
 class Dabshell:
     def __init__(self):
         self.cwd = self.canon(".")
@@ -292,15 +323,17 @@ class Dabshell:
         self.info_pythonproj_s = ""
         self.info_git_cwd = None
         self.info_git_s = ""
-        self.commands = {
-            "cd": self.cmd_cd,
-            "ls": self.cmd_ls,
-            "pwd": self.cmd_pwd,
-            "cat": self.cmd_cat,
-            "head": self.cmd_head,
-            "tail": self.cmd_tail,
-            "history": self.cmd_history,
-        }
+        self.env = Env()
+        self.init_cmd(CmdCd())
+        self.init_cmd(CmdLs())
+        self.init_cmd(CmdPwd())
+        self.init_cmd(CmdCat())
+        self.init_cmd(CmdHead())
+        self.init_cmd(CmdTail())
+        self.init_cmd(CmdHistory())
+
+    def init_cmd(self, cmd):
+        self.env.set(cmd.name, cmd)
 
     def prompt(self):
         s = ""
@@ -366,7 +399,7 @@ class Dabshell:
 
     def complete_word(self, word):
         potentials = []
-        for cname in self.commands:
+        for cname in self.env.names():
             if cname.startswith(word):
                 potentials.append(cname)
         for fname in os.listdir(self.cwd):
@@ -500,119 +533,6 @@ class Dabshell:
                 self.outp.write(f"{esc}[{pos}C")  # Move cursor to index
             self.outp.flush()
 
-    def cmd_ls(self, args):
-        if len(args) == 0:
-            path = self.canon(self.cwd)
-        else:
-            if os.path.isabs(args[0]):
-                path = self.canon(args[0])
-            else:
-                path = self.canon(os.path.join(self.cwd, args[0]))
-        if os.path.exists(path):
-            for fname in os.listdir(path):
-                print(fname)
-
-    def cmd_cd(self, args):
-        if len(args) == 0:
-            self.cwd = self.canon(".")
-        else:
-            path = args[0]
-            if os.path.isabs(path):
-                cwd_ = self.canon(path)
-            else:
-                cwd_ = self.canon(os.path.join(self.cwd, path))
-            if os.path.isdir(cwd_):
-                self.cwd = cwd_
-            else:
-                print(f"ERR: cannot cd to {cwd_}")
-
-    def cmd_pwd(self, args):
-        print(self.cwd)
-
-    def cmd_cat(self, args):
-        for filename in args:
-            if not os.path.isabs(filename):
-                filename = os.path.normpath(os.path.join(self.cwd, filename))
-            if os.path.exists(filename):
-                with open(filename, encoding="utf_8") as infile:
-                    for line in infile:
-                        print(line, end="")
-
-    def cmd_tail(self, args):
-        n = 20
-        filenames = []
-        after_args = False
-        idx = 0
-        while idx < len(args):
-            arg = args[idx]
-            if (
-                not after_args
-                and (arg.startswith("-") or arg.startswith("--"))
-            ):
-                if arg == "--":
-                    after_args = True
-                elif arg == "-n":
-                    n = int(args[idx+1])
-                    idx += 1
-                elif arg.startswith("--lines="):
-                    n = int(arg[len("--lines=")])
-            else:
-                filenames.append(arg)
-            idx += 1
-
-        for filename in filenames:
-            if not os.path.isabs(filename):
-                filename = self.canon(os.path.join(self.cwd, filename))
-            if os.path.exists(filename):
-                with open(filename, encoding="utf_8") as infile:
-                    # TODO for now, we read everything, later, optimize
-                    lines = infile.readlines()
-                    for line in lines[-n:]:
-                        print(line, end="")
-
-    def cmd_head(self, args):
-        n = 20
-        filenames = []
-        after_args = False
-        idx = 0
-        while idx < len(args):
-            arg = args[idx]
-            if (
-                not after_args
-                and (arg.startswith("-") or arg.startswith("--"))
-            ):
-                if arg == "--":
-                    after_args = True
-                elif arg == "-n":
-                    n = int(args[idx+1])
-                    idx += 1
-                elif arg.startswith("--lines="):
-                    n = int(arg[len("--lines=")])
-            else:
-                filenames.append(arg)
-            idx += 1
-
-        for filename in filenames:
-            if not os.path.isabs(filename):
-                filename = self.canon(os.path.join(self.cwd, filename))
-            if os.path.exists(filename):
-                with open(filename, encoding="utf_8") as infile:
-                    for i in range(n):
-                        line = infile.readline()
-                        if not line:
-                            break
-                        print(line, end="")
-
-    def cmd_history(self, args):
-        if not args:
-            for index, line in enumerate(self.history):
-                print(index, line)
-        else:
-            query = args[0].lower()
-            for index, line in enumerate(self.history):
-                if line.lower().find(query) != -1:
-                    print(index, line)
-
     def execute(self, line):
         line = line.strip()
         if not line:
@@ -627,8 +547,9 @@ class Dabshell:
         # trigger prompt info update
         self.info_pythonproj_cwd = None
         self.info_git_cwd = None
-        if cmd in self.commands:
-            self.commands[cmd](args)
+        cmd_ = self.env.get(cmd)
+        if cmd_:
+            cmd_.execute(self, args)
         elif cmd == "exit":
             return False
         else:
@@ -651,6 +572,165 @@ class Dabshell:
             except Exception as e:
                 print(e)
         return True
+
+
+class Cmd:
+    def __init__(self, name):
+        self.name = name
+
+    def __repr__(self):
+        return f"<{self.name}>"
+
+    def __str__(self):
+        return self.name
+
+
+class CmdLs(Cmd):
+    def __init__(self):
+         Cmd.__init__(self, "ls")
+
+    def execute(self, shell, args):
+        if len(args) == 0:
+            path = shell.canon(shell.cwd)
+        else:
+            if os.path.isabs(args[0]):
+                path = shell.canon(args[0])
+            else:
+                path = shell.canon(os.path.join(shell.cwd, args[0]))
+        if os.path.exists(path):
+            for fname in os.listdir(path):
+                print(fname)
+
+
+class CmdCd(Cmd):
+    def __init__(self):
+        Cmd.__init__(self, "cd")
+
+    def execute(self, shell, args):
+        if len(args) == 0:
+            shell.cwd = shell.canon(".")
+        else:
+            path = args[0]
+            if os.path.isabs(path):
+                cwd_ = shell.canon(path)
+            else:
+                cwd_ = shell.canon(os.path.join(shell.cwd, path))
+            if os.path.isdir(cwd_):
+                shell.cwd = cwd_
+            else:
+                print(f"ERR: cannot cd to {cwd_}")
+
+
+class CmdPwd(Cmd):
+    def __init__(self):
+        Cmd.__init__(self, "pwd")
+
+    def execute(self, shell, args):
+       print(shell.cwd)
+
+
+class CmdCat(Cmd):
+    def __init__(self):
+        Cmd.__init__(self, "cat")
+
+    def execute(self, shell, args):
+        for filename in args:
+            if not os.path.isabs(filename):
+                filename = os.path.normpath(os.path.join(shell.cwd, filename))
+            if os.path.exists(filename):
+                with open(filename, encoding="utf_8") as infile:
+                    for line in infile:
+                        print(line, end="")
+
+
+class CmdTail(Cmd):
+    def __init__(self):
+        Cmd.__init__(self, "tail")
+
+    def execute(self, shell, args):
+        n = 20
+        filenames = []
+        after_args = False
+        idx = 0
+        while idx < len(args):
+            arg = args[idx]
+            if (
+                not after_args
+                and (arg.startswith("-") or arg.startswith("--"))
+            ):
+                if arg == "--":
+                    after_args = True
+                elif arg == "-n":
+                    n = int(args[idx+1])
+                    idx += 1
+                elif arg.startswith("--lines="):
+                    n = int(arg[len("--lines=")])
+            else:
+                filenames.append(arg)
+            idx += 1
+
+        for filename in filenames:
+            if not os.path.isabs(filename):
+                filename = shell.canon(os.path.join(shell.cwd, filename))
+            if os.path.exists(filename):
+                with open(filename, encoding="utf_8") as infile:
+                    # TODO for now, we read everything, later, optimize
+                    lines = infile.readlines()
+                    for line in lines[-n:]:
+                        print(line, end="")
+
+
+class CmdHead(Cmd):
+    def __init__(self):
+        Cmd.__init__(self, "head")
+
+    def execute(self, shell, args):
+        n = 20
+        filenames = []
+        after_args = False
+        idx = 0
+        while idx < len(args):
+            arg = args[idx]
+            if (
+                not after_args
+                and (arg.startswith("-") or arg.startswith("--"))
+            ):
+                if arg == "--":
+                    after_args = True
+                elif arg == "-n":
+                    n = int(args[idx+1])
+                    idx += 1
+                elif arg.startswith("--lines="):
+                    n = int(arg[len("--lines=")])
+            else:
+                filenames.append(arg)
+            idx += 1
+
+        for filename in filenames:
+            if not os.path.isabs(filename):
+                filename = shell.canon(os.path.join(shell.cwd, filename))
+            if os.path.exists(filename):
+                with open(filename, encoding="utf_8") as infile:
+                    for i in range(n):
+                        line = infile.readline()
+                        if not line:
+                            break
+                        print(line, end="")
+
+
+class CmdHistory(Cmd):
+    def __init__(self):
+        Cmd.__init__(self, "history")
+
+    def execute(self, shell, args):
+        if not args:
+            for index, line in enumerate(shell.history):
+                print(index, line)
+        else:
+            query = args[0].lower()
+            for index, line in enumerate(shell.history):
+                if line.lower().find(query) != -1:
+                    print(index, line)
 
 
 def dabshell():
