@@ -178,7 +178,15 @@ def find_partial_executable(cwd, word):
                 if fname.endswith(".exe"):
                     fname = fname[:-4]
                 results.append(fname)
-    # TODO scan PATH
+    if not results:
+        for path in os.environ.get("PATH", "").split(os.pathsep):
+            if not os.path.exists(path):
+                continue
+            for fname in os.listdir(path):
+                if fname.startswith(word):
+                    if fname.endswith(".exe"):
+                        fname = fname[:-4]
+                    results.append(fname)
     return results
 
 
