@@ -166,6 +166,65 @@ def find_executable(cwd, executable):
         return shutil.which(executable)
 
 
+def find_partial_executable(cwd, word):
+    results = []
+    if IS_WIN:
+        venv = os.path.join(cwd, "venv\\Scripts")
+    else:
+        venv = os.path.join(cwd, "venv/bin")
+    if os.path.isdir(venv):
+        for fname in os.listdir(venv):
+            if fname.startswith(word):
+                if fname.endswith(".exe"):
+                    fname = fname[:-4]
+                results.append(fname)
+    # TODO scan PATH
+    return results
+
+
+def split_command_quoted(line):
+    parts = []
+    current_part = ""
+    in_quote = False
+    for idx in range(len(line)):
+        ch = line[idx]
+        if ch == "\"" and not in_quote:
+            if current_part:
+                parts.append(current_part)
+                current_part = "\""
+            in_quote = True
+        elif (
+            ch == "\\"
+            and idx < len(line) - 1
+            and line[idx+1] == "\""
+            and in_quote
+        ):
+            current_part += "\\\""
+            idx += 1
+        elif (
+            ch == "\\"
+            and idx < len(line) - 1
+            and line[idx+1] == "\\"
+            and in_quote
+        ):
+            current_part += "\\\\"
+            idx += 1
+        elif ch =="\"" and in_quote:
+            in_quote = False
+            parts.append(current_part + "\"")
+            current_part = ""
+        elif ch == " " and not in_quote:
+            if current_part:
+                parts.append(current_part)
+                current_part = ""
+        else:
+            current_part += ch
+        idx += 1
+    if current_part:
+        parts.append(current_part)
+    return parts
+
+
 def split_command(line):
     parts = []
     current_part = ""
@@ -181,6 +240,14 @@ def split_command(line):
             ch == "\\"
             and idx < len(line) - 1
             and line[idx+1] == "\""
+            and in_quote
+        ):
+            current_part += "\""
+            idx += 1
+        elif (
+            ch == "\\"
+            and idx < len(line) - 1
+            and line[idx+1] == "\\"
             and in_quote
         ):
             current_part += "\\"
@@ -217,6 +284,15 @@ class Dabshell:
         self.info_pythonproj_s = ""
         self.info_git_cwd = None
         self.info_git_s = ""
+        self.commands = {
+            "cd": self.cmd_cd,
+            "ls": self.cmd_ls,
+            "pwd": self.cmd_pwd,
+            "cat": self.cmd_cat,
+            "head": self.cmd_head,
+            "tail": self.cmd_tail,
+            "history": self.cmd_history,
+        }
 
     def prompt(self):
         s = ""
@@ -252,7 +328,7 @@ class Dabshell:
         self.info_git_cwd = self.cwd
         self.info_git_s = "", False
         wd = self.cwd
-        while wd:
+        while not os.path.ismount(wd):
             gitdir = os.path.join(wd, ".git")
             if os.path.isdir(gitdir):
                 break
@@ -280,6 +356,34 @@ class Dabshell:
             return None
         return os.path.normpath(os.path.abspath(path))
 
+    def complete_word(self, word):
+        potentials = []
+        for cname in self.commands:
+            if cname.startswith(word):
+                potentials.append(cname)
+        for fname in os.listdir(self.cwd):
+            if fname.startswith(word):
+                potentials.append(fname)
+        if not potentials:
+            cmds = find_partial_executable(self.cwd, word)
+            if cmds:
+                potentials += cmds
+        if not potentials:
+            return None
+        if len(potentials) == 1:
+            return potentials[0]
+        # find common prefix
+        prefix = word
+        prefix_len = len(word)
+        max_len = min([len(w) for w in potentials])
+        for idx in range(prefix_len+1, max_len+1):
+            prefixes = set([w[0:idx] for w in potentials])
+            if len(prefixes) > 1:
+                break
+            prefix = list(prefixes)[0]
+            prefix_len = len(prefix)
+        return prefix
+
     def run(self):
         self.outp.write(self.prompt() + "\n")
         self.outp.flush()
@@ -301,6 +405,15 @@ class Dabshell:
                     self.outp.flush()
                     self.line = ""
                     self.index = 0
+            elif key == KEY_TAB:
+                if self.line.strip() and self.index == len(self.line):
+                    parts = split_command_quoted(self.line)
+                    word = parts[-1]
+                    completed = self.complete_word(word)
+                    if completed:
+                        parts[-1] = completed
+                        self.line = " ".join(parts)
+                        self.index = len(self.line)
             elif key == KEY_ESC:
                 self.line = ""
                 self.index = 0
@@ -506,20 +619,8 @@ class Dabshell:
         # trigger prompt info update
         self.info_pythonproj_cwd = None
         self.info_git_cwd = None
-        if cmd == "ls":
-            self.cmd_ls(args)
-        elif cmd == "cd":
-            self.cmd_cd(args)
-        elif cmd == "pwd":
-            self.cmd_pwd(args)
-        elif cmd == "cat":
-            self.cmd_cat(args)
-        elif cmd == "tail":
-            self.cmd_tail(args)
-        elif cmd == "head":
-            self.cmd_head(args)
-        elif cmd == "history":
-            self.cmd_history(args)
+        if cmd in self.commands:
+            self.commands[cmd](args)
         elif cmd == "exit":
             return False
         else:
