@@ -332,6 +332,7 @@ class Dabshell:
         self.env = Env()
         for name in os.environ:
             self.env.set("env:" + name, os.environ.get(name, ""))
+        self.init_cmd(CmdRun())
         self.init_cmd(CmdCd())
         self.init_cmd(CmdLs())
         self.init_cmd(CmdPwd())
@@ -565,24 +566,7 @@ class Dabshell:
         elif cmd == "exit":
             return False
         else:
-            try:
-                executable = self.canon(find_executable(self.cwd, cmd))
-                if executable is None:
-                    print(f"ERR: {cmd} not found")
-                else:
-                    if self.log:
-                        print("::", executable)
-                    subprocess.run(
-                        [
-                            executable,
-                            *args,
-                        ],
-                        cwd=self.cwd,
-                    )
-            except KeyboardInterrupt:
-                pass
-            except Exception as e:
-                print(e)
+            self.env.get("run").execute(self, [cmd, *args])
         return True
 
 
@@ -595,6 +579,36 @@ class Cmd:
 
     def __str__(self):
         return self.name
+
+
+class CmdRun(Cmd):
+    def __init__(self):
+         Cmd.__init__(self, "run")
+
+    def help(self):
+        return "<cmd> [<arg>...]   : runs the external command"
+
+    def execute(self, shell, args):
+        cmd = args[0]
+        args = args[1:]
+        try:
+            executable = shell.canon(find_executable(shell.cwd, cmd))
+            if executable is None:
+                print(f"ERR: {cmd} not found")
+            else:
+                if shell.log:
+                    print("::", executable)
+                subprocess.run(
+                    [
+                        executable,
+                        *args,
+                    ],
+                    cwd=shell.cwd,
+                )
+        except KeyboardInterrupt:
+            pass
+        except Exception as e:
+            print(e)
 
 
 class CmdLs(Cmd):
