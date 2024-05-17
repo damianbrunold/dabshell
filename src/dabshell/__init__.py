@@ -331,6 +331,7 @@ class Dabshell:
         self.init_cmd(CmdHead())
         self.init_cmd(CmdTail())
         self.init_cmd(CmdHistory())
+        self.init_cmd(CmdHelp())
 
     def init_cmd(self, cmd):
         self.env.set(cmd.name, cmd)
@@ -589,6 +590,9 @@ class CmdLs(Cmd):
     def __init__(self):
          Cmd.__init__(self, "ls")
 
+    def help(self):
+        return "[<dir>]   : lists the contents of the directory"
+
     def execute(self, shell, args):
         if len(args) == 0:
             path = shell.canon(shell.cwd)
@@ -605,6 +609,9 @@ class CmdLs(Cmd):
 class CmdCd(Cmd):
     def __init__(self):
         Cmd.__init__(self, "cd")
+
+    def help(self):
+        return "<dir>   : changes the current directory"
 
     def execute(self, shell, args):
         if len(args) == 0:
@@ -625,6 +632,9 @@ class CmdPwd(Cmd):
     def __init__(self):
         Cmd.__init__(self, "pwd")
 
+    def help(self):
+        return ": prints the current directory"
+
     def execute(self, shell, args):
        print(shell.cwd)
 
@@ -632,6 +642,9 @@ class CmdPwd(Cmd):
 class CmdCat(Cmd):
     def __init__(self):
         Cmd.__init__(self, "cat")
+
+    def help(self):
+        return "[<file> ...]   : prints the contents of the files"
 
     def execute(self, shell, args):
         for filename in args:
@@ -646,6 +659,12 @@ class CmdCat(Cmd):
 class CmdTail(Cmd):
     def __init__(self):
         Cmd.__init__(self, "tail")
+
+    def help(self):
+        return (
+            "[-n <lines>] [--lines=<lines>] <file> ... "
+            " : prints the last lines of each file"
+        )
 
     def execute(self, shell, args):
         n = 20
@@ -683,6 +702,12 @@ class CmdTail(Cmd):
 class CmdHead(Cmd):
     def __init__(self):
         Cmd.__init__(self, "head")
+
+    def help(self):
+        return (
+            "[-n <lines>] [--lines=<lines>] <file> ... "
+            " : prints the first lines of each file"
+        )
 
     def execute(self, shell, args):
         n = 20
@@ -722,6 +747,11 @@ class CmdHistory(Cmd):
     def __init__(self):
         Cmd.__init__(self, "history")
 
+    def help(self):
+        return (
+            "[<filter>]   : shows the history of commands, optionally filtered"
+        )
+
     def execute(self, shell, args):
         if not args:
             for index, line in enumerate(shell.history):
@@ -731,6 +761,31 @@ class CmdHistory(Cmd):
             for index, line in enumerate(shell.history):
                 if line.lower().find(query) != -1:
                     print(index, line)
+
+
+class CmdHelp(Cmd):
+    def __init__(self):
+        Cmd.__init__(self, "help")
+
+    def help(self):
+        return (
+            "[<cmd>]   : shows the list of available command "
+            "and optionally the description of a specific command"
+        )
+
+    def execute(self, shell, args):
+        if not args:
+            names = [
+                name
+                for name in shell.env.names()
+                if isinstance(shell.env.get(name), Cmd)
+            ]
+            print(" ".join(names))
+        else:
+            name = args[0]
+            obj = shell.env.get(name)
+            if obj and isinstance(obj, Cmd):
+                print(obj.name, obj.help())
 
 
 def dabshell():
