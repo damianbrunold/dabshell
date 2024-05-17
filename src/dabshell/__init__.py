@@ -281,7 +281,7 @@ class Dabshell:
         return os.path.normpath(os.path.abspath(path))
 
     def run(self):
-        self.outp.write(self.prompt())
+        self.outp.write(self.prompt() + "\n")
         self.outp.flush()
         while True:
             key = self.inp.getch()
@@ -297,7 +297,7 @@ class Dabshell:
                     print()
                     if not self.execute(self.line):
                         break
-                    self.outp.write(self.prompt())
+                    self.outp.write(self.prompt() + "\n")
                     self.outp.flush()
                     self.line = ""
                     self.index = 0
@@ -371,11 +371,11 @@ class Dabshell:
                 .replace(f"{esc}[32m", "")
                 .replace(f"{esc}[0m", "")
             )
-            self.outp.write(current_prompt + self.line)
+            self.outp.write(self.line)
             self.outp.write(f"{esc}[0K")
             if self.index < len(self.line):
                 self.outp.write(f"{esc}[1000D")  # Move all the way left
-                pos = len(clean_prompt) + self.index
+                pos = self.index
                 self.outp.write(f"{esc}[{pos}C")  # Move cursor to index
             self.outp.flush()
 
