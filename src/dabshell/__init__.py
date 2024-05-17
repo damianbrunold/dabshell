@@ -352,7 +352,7 @@ class FileOutput:
         print(s, file=self.out)
 
 
-class ProgramFailedException(Exception):
+class CommandFailedException(Exception):
     pass
 
 
@@ -510,7 +510,7 @@ class Dabshell:
                     try:
                         if not self.execute(self.line):
                             break
-                    except ProgramFailedException:
+                    except CommandFailedException:
                         pass
                     self.outp.write(self.prompt() + "\n")
                     self.line = ""
@@ -653,7 +653,7 @@ class CmdRun(Cmd):
             executable = shell.canon(find_executable(shell.cwd, cmd))
             if executable is None:
                 shell.oute.print(f"ERR: {cmd} not found")
-                raise ProgramFailedException()
+                raise CommandFailedException()
             else:
                 if shell.log:
                     shell.outp.print(f":: {executable}")
@@ -667,8 +667,8 @@ class CmdRun(Cmd):
                     stderr=shell.oute.out,
                 )
                 if p.returncode != 0:
-                    raise ProgramFailedException()
-        except ProgramFailedException:
+                    raise CommandFailedException()
+        except CommandFailedException:
             raise
         except KeyboardInterrupt:
             pass
@@ -696,7 +696,7 @@ class CmdScript(Cmd):
                 if line and not line.startswith("#"):
                     try:
                         scriptshell.execute(line)
-                    except ProgramFailedException:
+                    except CommandFailedException:
                         break
         CmdRedirect().execute(shell, "off")
 
@@ -716,7 +716,7 @@ class CmdSource(Cmd):
                 if line and not line.startswith("#"):
                     try:
                         shell.execute(line)
-                    except ProgramFailedExeption:
+                    except CommandFailedExeption:
                         break
 
 
@@ -925,8 +925,12 @@ class CmdRm(Cmd):
     def execute(self, shell, args):
         for arg in args:
             for path in glob.glob(arg, root_dir=shell.cwd, recursive=True):
-                if os.path.exists(path):
-                    os.remove(path)
+                if os.path.isfile(path):
+                    try:
+                        os.remove(path)
+                    except Exception as e:
+                        shell.oute.print(str(e))
+                        raise CommandFailedException()
 
 
 class CmdMkdir(Cmd):
@@ -939,7 +943,11 @@ class CmdMkdir(Cmd):
     def execute(self, shell, args):
         path = os.path.join(shell.cwd, args[0])
         if not os.path.exists(path):
-            os.makedirs(path, exist_ok=True)
+            try:
+                os.makedirs(path, exist_ok=True)
+            except Exception as e:
+                shell.oute.print(str(e))
+                raise CommandFailedException()
 
 
 class CmdRmdir(Cmd):
@@ -952,7 +960,11 @@ class CmdRmdir(Cmd):
     def execute(self, shell, args):
         path = os.path.join(shell.cwd, args[0])
         if os.path.isdir(path):
-            shutil.rmtree(path)
+            try:
+                shutil.rmtree(path)
+            except Exception as e:
+                shell.oute.print(str(e))
+                raise CommandFailedException()
 
 
 class CmdRedirect(Cmd):
