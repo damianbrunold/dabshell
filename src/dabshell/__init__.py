@@ -338,11 +338,11 @@ class StdError:
 
 
 class FileOutput:
-    def __init__(self, filename, append=False):
+    def __init__(self, filename, encoding="utf8", append=False):
         mode = "w"
         if append:
             mode = "a+"
-        self.out = open(filename, mode, encoding="utf8")
+        self.out = open(filename, mode, encoding=encoding)
 
     def write(self, s):
         self.out.write(s)
@@ -381,6 +381,7 @@ class Dabshell:
             self.init_cmd(CmdRm())
             self.init_cmd(CmdRmdir())
             self.init_cmd(CmdMkdir())
+            self.init_cmd(CmdRedirect())
             self.init_cmd(CmdHistory())
             self.init_cmd(CmdHelp())
         self.history = []
@@ -690,10 +691,13 @@ class CmdScript(Cmd):
             scriptshell.env.set(f"arg{idx}", arg)
         with open(scriptfile, encoding="utf8") as infile:
             for line in infile:
-                try:
-                    scriptshell.execute(line)
-                except ProgramFailedException:
-                    break
+                line = line.strip()
+                if line and not line.startswith("#"):
+                    try:
+                        scriptshell.execute(line)
+                    except ProgramFailedException:
+                        break
+        CmdRedirect().execute(shell, "off")
 
 
 class CmdSource(Cmd):
@@ -707,10 +711,12 @@ class CmdSource(Cmd):
         scriptfile = args[0]
         with open(scriptfile, encoding="utf8") as infile:
             for line in infile:
-                try:
-                    shell.execute(line)
-                except ProgramFailedExeption:
-                    break
+                line = line.strip()
+                if line and not line.startswith("#"):
+                    try:
+                        shell.execute(line)
+                    except ProgramFailedExeption:
+                        break
 
 
 class CmdLs(Cmd):
@@ -946,6 +952,36 @@ class CmdRmdir(Cmd):
         path = os.path.join(shell.cwd, args[0])
         if os.path.isdir(path):
             shutil.rmtree(path)
+
+
+class CmdRedirect(Cmd):
+    def __init__(self):
+        Cmd.__init__(self, "redirect")
+
+    def help(self):
+        return (
+            "out|err|all|off [filename [--append]]: "
+            "enable/disable output redirection"
+        )
+
+    def execute(self, shell, args):
+        if args[0] == "off":
+            if not isinstance(shell.outp, StdOutput):
+                shell.outp.out.close()
+                shell.outp = StdOutput()
+            if not isinstance(shell.outp, StdError):
+                shell.oute.out.close()
+                shell.oute = StdError()
+        else:
+            out = FileOutput(
+                args[1],
+                encoding="utf8",
+                append="--append" in args,
+            )
+            if args[0] == "out" or args[0] == "all":
+                shell.outp = out
+            if args[0] == "err" or args[0] == "all":
+                shell.oute = out
 
 
 class CmdHistory(Cmd):
