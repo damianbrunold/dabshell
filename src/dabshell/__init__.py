@@ -233,7 +233,7 @@ def split_command_quoted(line):
     return parts
 
 
-def split_command(line):
+def split_command(line, env):
     parts = []
     current_part = ""
     in_quote = False
@@ -262,6 +262,12 @@ def split_command(line):
             idx += 1
         elif ch =="\"" and in_quote:
             in_quote = False
+            # make this more efficient?!
+            for name in env.names():
+                current_part = current_part.replace(
+                    "{" + name + "}",
+                    str(env.get(name)),
+                )
             parts.append(current_part)
             current_part = ""
         elif ch == " " and not in_quote:
@@ -324,12 +330,17 @@ class Dabshell:
         self.info_git_cwd = None
         self.info_git_s = ""
         self.env = Env()
+        for name in os.environ:
+            self.env.set("env:" + name, os.environ.get(name, ""))
         self.init_cmd(CmdCd())
         self.init_cmd(CmdLs())
         self.init_cmd(CmdPwd())
+        self.init_cmd(CmdSet())
+        self.init_cmd(CmdGet())
         self.init_cmd(CmdCat())
         self.init_cmd(CmdHead())
         self.init_cmd(CmdTail())
+        self.init_cmd(CmdEcho())
         self.init_cmd(CmdHistory())
         self.init_cmd(CmdHelp())
 
@@ -538,7 +549,7 @@ class Dabshell:
         line = line.strip()
         if not line:
             return True
-        cmd, args = split_command(line)
+        cmd, args = split_command(line, self.env)
         if cmd != "history":
             self.history.append(line)
             self.history_index = -1
@@ -637,6 +648,33 @@ class CmdPwd(Cmd):
 
     def execute(self, shell, args):
        print(shell.cwd)
+
+
+class CmdSet(Cmd):
+    def __init__(self):
+        Cmd.__init__(self, "set")
+
+    def help(self):
+        return "<name> <value>   : sets a variable"
+
+    def execute(self, shell, args):
+        name = args[0]
+        value = args[1]
+        shell.env.set(name, value)
+
+
+class CmdGet(Cmd):
+    def __init__(self):
+        Cmd.__init__(self, "get")
+
+    def help(self):
+        return "<name>   : prints the value of a variable"
+
+    def execute(self, shell, args):
+        try:
+            print(shell.env.get(args[0]))
+        except ValueError:
+            pass
 
 
 class CmdCat(Cmd):
@@ -741,6 +779,17 @@ class CmdHead(Cmd):
                         if not line:
                             break
                         print(line, end="")
+
+
+class CmdEcho(Cmd):
+    def __init__(self):
+        Cmd.__init__(self, "echo")
+
+    def help(self):
+        return "<value> : prints the value"
+
+    def execute(self, shell, args):
+        print(" ".join(args))
 
 
 class CmdHistory(Cmd):
