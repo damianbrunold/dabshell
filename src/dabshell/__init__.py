@@ -283,9 +283,9 @@ def split_command(line, env):
 
 
 class Env:
-    def __init__(self):
+    def __init__(self, parent=None):
         self.mappings = {}
-        self.parent = None
+        self.parent = parent
 
     def names(self):
         result = list(self.mappings.keys())
@@ -314,8 +314,32 @@ class Env:
 
 
 class Dabshell:
-    def __init__(self):
-        self.cwd = self.canon(".")
+    def __init__(self, parent_shell=None):
+        if parent_shell:
+            self.cwd = parent_shell.cwd
+            self.env = Env(parent_shell.env)
+        else:
+            self.cwd = self.canon(".")
+            self.env = Env()
+            for name in os.environ:
+                self.env.set("env:" + name, os.environ.get(name, ""))
+            self.init_cmd(CmdRun())
+            self.init_cmd(CmdScript())
+            self.init_cmd(CmdSource())
+            self.init_cmd(CmdCd())
+            self.init_cmd(CmdLs())
+            self.init_cmd(CmdPwd())
+            self.init_cmd(CmdSet())
+            self.init_cmd(CmdGet())
+            self.init_cmd(CmdCat())
+            self.init_cmd(CmdHead())
+            self.init_cmd(CmdTail())
+            self.init_cmd(CmdEcho())
+            self.init_cmd(CmdRm())
+            self.init_cmd(CmdRmdir())
+            self.init_cmd(CmdMkdir())
+            self.init_cmd(CmdHistory())
+            self.init_cmd(CmdHelp())
         self.history = []
         self.history_index = -1
         self.history_current = ""
@@ -329,21 +353,6 @@ class Dabshell:
         self.info_pythonproj_s = ""
         self.info_git_cwd = None
         self.info_git_s = ""
-        self.env = Env()
-        for name in os.environ:
-            self.env.set("env:" + name, os.environ.get(name, ""))
-        self.init_cmd(CmdRun())
-        self.init_cmd(CmdCd())
-        self.init_cmd(CmdLs())
-        self.init_cmd(CmdPwd())
-        self.init_cmd(CmdSet())
-        self.init_cmd(CmdGet())
-        self.init_cmd(CmdCat())
-        self.init_cmd(CmdHead())
-        self.init_cmd(CmdTail())
-        self.init_cmd(CmdEcho())
-        self.init_cmd(CmdHistory())
-        self.init_cmd(CmdHelp())
 
     def init_cmd(self, cmd):
         self.env.set(cmd.name, cmd)
@@ -565,6 +574,8 @@ class Dabshell:
             cmd_.execute(self, args)
         elif cmd == "exit":
             return False
+        elif cmd.endswith(".dsh"):
+            self.env.get("script").execute(self, [cmd, *args])
         else:
             self.env.get("run").execute(self, [cmd, *args])
         return True
@@ -609,6 +620,39 @@ class CmdRun(Cmd):
             pass
         except Exception as e:
             print(e)
+
+
+class CmdScript(Cmd):
+    def __init__(self):
+         Cmd.__init__(self, "script")
+
+    def help(self):
+        return "<scriptfile> [<arg>...]   : runs a dabshell script"
+
+    def execute(self, shell, args):
+        scriptfile = args[0]
+        args = args[1:]
+        scriptshell = Dabshell(shell)
+        scriptshell.env.set("argc", len(args))
+        for idx, arg in enumerate(args):
+            scriptshell.env.set(f"arg{idx}", arg)
+        with open(scriptfile, encoding="utf8") as infile:
+            for line in infile:
+                scriptshell.execute(line)
+
+
+class CmdSource(Cmd):
+    def __init__(self):
+         Cmd.__init__(self, "source")
+
+    def help(self):
+        return "<scriptfile>   : sources a dabshell script"
+
+    def execute(self, shell, args):
+        scriptfile = args[0]
+        with open(scriptfile, encoding="utf8") as infile:
+            for line in infile:
+                shell.execute(line)
 
 
 class CmdLs(Cmd):
@@ -804,6 +848,46 @@ class CmdEcho(Cmd):
 
     def execute(self, shell, args):
         print(" ".join(args))
+
+
+class CmdRm(Cmd):
+    def __init__(self):
+        Cmd.__init__(self, "rm")
+
+    def help(self):
+        return "<filename>... : deletes the files"
+
+    def execute(self, shell, args):
+        for arg in args:
+            path = os.path.join(shell.cwd, arg)
+            if os.path.exists(path):
+                os.remove(path)
+
+
+class CmdMkdir(Cmd):
+    def __init__(self):
+        Cmd.__init__(self, "mkdir")
+
+    def help(self):
+        return "<dir> : creates the directory"
+
+    def execute(self, shell, args):
+        path = os.path.join(shell.cwd, args[0])
+        if not os.path.exists(path):
+            os.makedirs(path, exist_ok=True)
+
+
+class CmdRmdir(Cmd):
+    def __init__(self):
+        Cmd.__init__(self, "rmdir")
+
+    def help(self):
+        return "<dir> : deletes the directory"
+
+    def execute(self, shell, args):
+        path = os.path.join(shell.cwd, args[0])
+        if os.path.isdir(path):
+            shutil.rmtree(path)
 
 
 class CmdHistory(Cmd):
