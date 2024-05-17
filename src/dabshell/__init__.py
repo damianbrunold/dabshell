@@ -1,3 +1,4 @@
+import glob
 import os
 import platform
 import re
@@ -923,9 +924,9 @@ class CmdRm(Cmd):
 
     def execute(self, shell, args):
         for arg in args:
-            path = os.path.join(shell.cwd, arg)
-            if os.path.exists(path):
-                os.remove(path)
+            for path in glob.glob(arg, root_dir=shell.cwd, recursive=True):
+                if os.path.exists(path):
+                    os.remove(path)
 
 
 class CmdMkdir(Cmd):
