@@ -370,9 +370,16 @@ class Dabshell:
             self.cwd = parent_shell.cwd
             self.env = Env(parent_shell.env)
             self.outp = parent_shell.outp
+            self.oute = parent_shell.oute
+            self.outp_old = parent_shell.outp_old
+            self.oute_old = parent_shell.oute_old
         else:
             self.cwd = self.canon(".")
             self.env = Env()
+            self.outp = StdOutput()
+            self.oute = StdError()
+            self.outp_old = None
+            self.oute_old = None
             for name in os.environ:
                 self.env.set("env:" + name, os.environ.get(name, ""))
             self.init_cmd(CmdRun())
@@ -398,8 +405,6 @@ class Dabshell:
         self.history_current = ""
         os.system("")
         self.inp = RawInput()
-        self.outp = StdOutput()
-        self.oute = StdError()
         self.line = ""
         self.index = 0
         self.log = False
@@ -733,7 +738,7 @@ class CmdScript(Cmd):
                         scriptshell.execute(line)
                     except CommandFailedException:
                         break
-        CmdRedirect().execute(shell, "off")
+        CmdRedirect().execute(shell, ["off"])
 
 
 class CmdSource(Cmd):
@@ -1016,19 +1021,41 @@ class CmdRedirect(Cmd):
         if args[0] == "off":
             if not isinstance(shell.outp, StdOutput):
                 shell.outp.out.close()
-                shell.outp = StdOutput()
-            if not isinstance(shell.outp, StdError):
+                if shell.outp_old:
+                    shell.outp = shell.outp_old
+                    shell.outp_old = None
+                else:
+                    shell.oupt = StdOutput()
+            if not isinstance(shell.oute, StdError):
                 shell.oute.out.close()
-                shell.oute = StdError()
+                if shell.oute_old:
+                    shell.oute = shell.oute_old
+                    shell.oute_old = None
+                else:
+                    shell.oute = StdError()
         else:
             out = FileOutput(
                 args[1],
                 encoding="utf8",
                 append="--append" in args,
             )
+            # We set the new output, but retain the old one
+            # in the out*_old variable. But we do this only
+            # once. That means, that if we redirect twice,
+            # we retain the original output and close the
+            # first redirected output before installing the
+            # second one.
             if args[0] == "out" or args[0] == "all":
+                if not shell.outp_old:
+                    shell.outp_old = shell.outp
+                elif isinstance(shell.outp, FileOutput):
+                    shell.outp.out.close()
                 shell.outp = out
             if args[0] == "err" or args[0] == "all":
+                if not shell.oute_old:
+                    shell.oute_old = shell.oute
+                elif isinstance(shell.oute, FileOutput):
+                    shell.oute.out.close()
                 shell.oute = out
 
 
