@@ -255,6 +255,7 @@ def replace_vars(s, env):
             var += ch
         elif ch == "}" and in_var:
             result += env.get(var, "{" + var + "}")
+            var = ""
             in_var = False
         elif ch == "'":
             in_single_quote = not in_single_quote
@@ -433,6 +434,8 @@ class Dabshell:
             self.init_cmd(CmdRm())
             self.init_cmd(CmdRmdir())
             self.init_cmd(CmdMkdir())
+            self.init_cmd(CmdDirname())
+            self.init_cmd(CmdBasename())
             self.init_cmd(CmdRedirect())
             self.init_cmd(CmdHistory())
             self.init_cmd(CmdDate())
@@ -876,7 +879,7 @@ class CmdSet(Cmd):
                 scriptshell.execute(" ".join(args[2:]))
             except CommandFailedException:
                 pass
-            value = scriptshell.outs.value()
+            value = scriptshell.outs.value().strip()
         else:
             value = " ".join(args[1:])
         shell.env.set(name, value)
@@ -1115,6 +1118,28 @@ class CmdRmdir(Cmd):
             except Exception as e:
                 shell.oute.print(str(e))
                 raise CommandFailedException()
+
+
+class CmdBasename(Cmd):
+    def __init__(self):
+        Cmd.__init__(self, "basename")
+
+    def help(self):
+        return "<path> : returns the basename of the path"
+
+    def execute(self, shell, args):
+        shell.outs.print(os.path.basename(args[0]))
+
+
+class CmdDirname(Cmd):
+    def __init__(self):
+        Cmd.__init__(self, "dirname")
+
+    def help(self):
+        return "<path> : returns the dirname part of the path"
+
+    def execute(self, shell, args):
+        shell.outs.print(os.path.dirname(args[0]))
 
 
 class CmdRedirect(Cmd):
