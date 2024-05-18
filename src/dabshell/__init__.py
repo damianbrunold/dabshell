@@ -371,15 +371,17 @@ class Dabshell:
             self.cwd = parent_shell.cwd
             self.env = Env(parent_shell.env)
             self.outp = parent_shell.outp
+            self.outs = parent_shell.outs
             self.oute = parent_shell.oute
-            self.outp_old = parent_shell.outp_old
+            self.outs_old = parent_shell.outs_old
             self.oute_old = parent_shell.oute_old
         else:
             self.cwd = self.canon(".")
             self.env = Env()
             self.outp = StdOutput()
+            self.outs = StdOutput()
             self.oute = StdError()
-            self.outp_old = None
+            self.outs_old = None
             self.oute_old = None
             for name in os.environ:
                 self.env.set("env:" + name, os.environ.get(name, ""))
@@ -548,7 +550,7 @@ class Dabshell:
                         self.line = self.history[hidx]
                         self.index = len(self.line)
                 else:
-                    self.outp.print()
+                    self.outs.print()
                     try:
                         if not self.execute(self.line):
                             break
@@ -629,13 +631,6 @@ class Dabshell:
                 self.index += 1
 
             self.outp.out.write(f"{esc}[1000D")  # Move all the way left
-            current_prompt = self.prompt()
-            clean_prompt = (
-                current_prompt
-                .replace(f"{esc}[31m", "")
-                .replace(f"{esc}[32m", "")
-                .replace(f"{esc}[0m", "")
-            )
             self.outp.out.write(self.line)
             self.outp.out.write(f"{esc}[0K")
             if self.index < len(self.line):
@@ -655,7 +650,7 @@ class Dabshell:
             self.history_index = -1
             self.history_current = ""
         if self.log:
-            self.outp.print(f":: {cmd} {args}")
+            self.outs.print(f":: {cmd} {args}")
         # trigger prompt info update
         self.info_pythonproj_cwd = None
         self.info_git_cwd = None
@@ -699,14 +694,14 @@ class CmdRun(Cmd):
                 raise CommandFailedException()
             else:
                 if shell.log:
-                    shell.outp.print(f":: {executable}")
+                    shell.outs.print(f":: {executable}")
                 p = subprocess.run(
                     [
                         executable,
                         *args,
                     ],
                     cwd=shell.cwd,
-                    stdout=shell.outp.out,
+                    stdout=shell.outs.out,
                     stderr=shell.oute.out,
                 )
                 if p.returncode != 0:
@@ -780,7 +775,7 @@ class CmdLs(Cmd):
                 path = shell.canon(os.path.join(shell.cwd, args[0]))
         if os.path.exists(path):
             for fname in os.listdir(path):
-                shell.outp.print(fname)
+                shell.outs.print(fname)
 
 
 class CmdCd(Cmd):
@@ -813,7 +808,7 @@ class CmdPwd(Cmd):
         return ": prints the current directory"
 
     def execute(self, shell, args):
-       shell.outp.print(shell.cwd)
+       shell.outs.print(shell.cwd)
 
 
 class CmdSet(Cmd):
@@ -838,7 +833,7 @@ class CmdGet(Cmd):
 
     def execute(self, shell, args):
         try:
-            shell.outp.print(shell.env.get(args[0]))
+            shell.outs.print(shell.env.get(args[0]))
         except ValueError:
             pass
 
@@ -857,7 +852,7 @@ class CmdCat(Cmd):
             if os.path.exists(filename):
                 with open(filename, encoding="utf_8") as infile:
                     for line in infile:
-                        shell.outp.write(line)
+                        shell.outs.write(line)
 
 
 class CmdTail(Cmd):
@@ -900,7 +895,7 @@ class CmdTail(Cmd):
                     # TODO for now, we read everything, later, optimize
                     lines = infile.readlines()
                     for line in lines[-n:]:
-                        shell.outp.write(line)
+                        shell.outs.write(line)
 
 
 class CmdHead(Cmd):
@@ -944,7 +939,7 @@ class CmdHead(Cmd):
                         line = infile.readline()
                         if not line:
                             break
-                        shell.outp.write(line)
+                        shell.outs.write(line)
 
 
 class CmdEcho(Cmd):
@@ -955,7 +950,7 @@ class CmdEcho(Cmd):
         return "<value> : prints the value"
 
     def execute(self, shell, args):
-        shell.outp.print(" ".join(args))
+        shell.outs.print(" ".join(args))
 
 
 class CmdRm(Cmd):
@@ -1022,11 +1017,11 @@ class CmdRedirect(Cmd):
 
     def execute(self, shell, args):
         if args[0] == "off":
-            if not isinstance(shell.outp, StdOutput):
-                shell.outp.out.close()
-                if shell.outp_old:
-                    shell.outp = shell.outp_old
-                    shell.outp_old = None
+            if not isinstance(shell.outs, StdOutput):
+                shell.outs.out.close()
+                if shell.outs_old:
+                    shell.outs = shell.outs_old
+                    shell.outs_old = None
                 else:
                     shell.oupt = StdOutput()
             if not isinstance(shell.oute, StdError):
@@ -1049,11 +1044,11 @@ class CmdRedirect(Cmd):
             # first redirected output before installing the
             # second one.
             if args[0] == "out" or args[0] == "all":
-                if not shell.outp_old:
-                    shell.outp_old = shell.outp
-                elif isinstance(shell.outp, FileOutput):
-                    shell.outp.out.close()
-                shell.outp = out
+                if not shell.outs_old:
+                    shell.outs_old = shell.outs
+                elif isinstance(shell.outs, FileOutput):
+                    shell.outs.out.close()
+                shell.outs = out
             if args[0] == "err" or args[0] == "all":
                 if not shell.oute_old:
                     shell.oute_old = shell.oute
@@ -1074,12 +1069,12 @@ class CmdHistory(Cmd):
     def execute(self, shell, args):
         if not args:
             for index, line in enumerate(shell.history):
-                shell.outp.print(f"{index} {line}")
+                shell.outs.print(f"{index} {line}")
         else:
             query = args[0].lower()
             for index, line in enumerate(shell.history):
                 if line.lower().find(query) != -1:
-                    shell.outp.print(f"{index} {line}")
+                    shell.outs.print(f"{index} {line}")
 
 
 class CmdDate(Cmd):
@@ -1120,7 +1115,7 @@ class CmdDate(Cmd):
         now = datetime.datetime.now()
         if offset != 0:
             now += datetime.timedelta(days=offset)
-        shell.outp.print(now.strftime(fmt))
+        shell.outs.print(now.strftime(fmt))
 
 
 class CmdHelp(Cmd):
@@ -1140,12 +1135,12 @@ class CmdHelp(Cmd):
                 for name in shell.env.names()
                 if isinstance(shell.env.get(name), Cmd)
             ]
-            shell.outp.print(" ".join(names))
+            shell.outs.print(" ".join(names))
         else:
             name = args[0]
             obj = shell.env.get(name)
             if obj and isinstance(obj, Cmd):
-                shell.outp.print(f"{obj.name} {obj.help()}")
+                shell.outs.print(f"{obj.name} {obj.help()}")
 
 
 def dabshell():
