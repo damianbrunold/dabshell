@@ -197,7 +197,7 @@ def find_partial_executable(cwd, word):
                     if fname.endswith(".exe"):
                         fname = fname[:-4]
                     results.append(fname)
-    return results
+    return sorted(results)
 
 
 def split_command_quoted(line):
@@ -301,7 +301,7 @@ class Env:
         result = list(self.mappings.keys())
         if self.parent:
             result += self.parent.names()
-        return result
+        return sorted(result)
 
     def set(self, name, value):
         self.mappings[name] = value
@@ -397,6 +397,8 @@ class Dabshell:
             self.init_cmd(CmdHead())
             self.init_cmd(CmdTail())
             self.init_cmd(CmdEcho())
+            self.init_cmd(CmdCp())
+            self.init_cmd(CmdMv())
             self.init_cmd(CmdRm())
             self.init_cmd(CmdRmdir())
             self.init_cmd(CmdMkdir())
@@ -680,6 +682,11 @@ class Cmd:
     def __init__(self, name):
         self.name = name
 
+    def canon(self, path):
+        if path is None:
+            return None
+        return os.path.normpath(os.path.abspath(path))
+
     def __repr__(self):
         return f"<{self.name}>"
 
@@ -784,7 +791,7 @@ class CmdLs(Cmd):
             else:
                 path = shell.canon(os.path.join(shell.cwd, args[0]))
         if os.path.exists(path):
-            for fname in os.listdir(path):
+            for fname in sorted(os.listdir(path)):
                 shell.outs.print(fname)
 
 
@@ -963,6 +970,59 @@ class CmdEcho(Cmd):
         shell.outs.print(" ".join(args))
 
 
+class CmdCp(Cmd):
+    def __init__(self):
+        Cmd.__init__(self, "cp")
+
+    def help(self):
+        return "<srcfiles>... <dest> : copies one or multiple files"
+
+    def execute(self, shell, args):
+        sources = args[:-1]
+        dest = args[-1]
+        if (
+            (not os.path.exists(dest) or os.path.isfile(dest))
+            and len(sources) > 1
+        ):
+            shell.oute.print("ERR: cannot copy multiple files to a file")
+            raise CommandFailedException()
+        for source in sources:
+            try:
+                shutil.copy(source, dest)
+            except Exception as e:
+                shell.oute.print(str(e))
+                raise CommandFailedException()
+
+
+class CmdMv(Cmd):
+    def __init__(self):
+        Cmd.__init__(self, "mv")
+
+    def help(self):
+        return "<srcfiles>... <dest> : moves one or multiple files"
+
+    def execute(self, shell, args):
+        sources = args[:-1]
+        dest = args[-1]
+        if (
+            (not os.path.exists(dest) or os.path.isfile(dest))
+            and len(sources) > 1
+        ):
+            shell.oute.print("ERR: cannot move multiple files to a file")
+            raise CommandFailedException()
+        for source in sources:
+            try:
+                if (
+                    os.path.isdir(dest)
+                    and os.path.isfile(os.path.join(dest, os.path.basename(source)))
+                ):
+                    os.remove(os.path.join(dest, os.path.basename(source)))
+                shutil.move(source, dest)
+            except Exception as e:
+                shell.oute.print(str(e))
+                raise CommandFailedException()
+
+
 class CmdRm(Cmd):
     def __init__(self):
         Cmd.__init__(self, "rm")
@@ -1009,6 +1069,7 @@ class CmdRmdir(Cmd):
         path = os.path.join(shell.cwd, args[0])
         if os.path.isdir(path):
             try:
+                # TODO only delete if empty? otherwise require -rf option?
                 shutil.rmtree(path)
             except Exception as e:
                 shell.oute.print(str(e))
