@@ -1087,28 +1087,38 @@ class CmdDate(Cmd):
 
     def help(self):
         return (
-            "[<offset>] [--terse] [--with-time]  "
+            "[<offset>] [--terse] [--with-time] [--format <fmt>]  "
             ": shows the current date"
         )
 
     def execute(self, shell, args):
         terse = "--terse" in args
         with_time = "--with-time" in args
-        offset = 0
-        for arg in args:
-            if arg.startswith("--"):
-                continue
-            offset = int(arg)
-            break
-        now = datetime.datetime.now()
-        if offset != 0:
-            now += datetime.timedelta(days=offset)
         if with_time:
             fmt = "%Y-%m-%dT%H:%M:%S"
         else:
             fmt = "%Y-%m-%d"
         if terse:
             fmt = fmt.replace("-", "").replace(":", "").replace("T", "-")
+        for idx, arg in enumerate(args):
+            if arg == "--format":
+                if idx < len(args)-1:
+                    fmt = args[idx+1]
+                break
+        offset = 0
+        idx = 0
+        while idx < len(args):
+            arg = args[idx]
+            if arg == "--format":
+                idx += 2
+            elif arg.startswith("--"):
+                idx += 1
+            else:
+                offset = int(arg)
+                break
+        now = datetime.datetime.now()
+        if offset != 0:
+            now += datetime.timedelta(days=offset)
         shell.outp.print(now.strftime(fmt))
 
 
