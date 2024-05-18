@@ -1,3 +1,4 @@
+import datetime
 import glob
 import os
 import platform
@@ -399,6 +400,7 @@ class Dabshell:
             self.init_cmd(CmdMkdir())
             self.init_cmd(CmdRedirect())
             self.init_cmd(CmdHistory())
+            self.init_cmd(CmdDate())
             self.init_cmd(CmdHelp())
         self.history = []
         self.history_index = -1
@@ -1077,6 +1079,37 @@ class CmdHistory(Cmd):
             for index, line in enumerate(shell.history):
                 if line.lower().find(query) != -1:
                     shell.outp.print(f"{index} {line}")
+
+
+class CmdDate(Cmd):
+    def __init__(self):
+        Cmd.__init__(self, "date")
+
+    def help(self):
+        return (
+            "[<offset>] [--terse] [--with-time]  "
+            ": shows the current date"
+        )
+
+    def execute(self, shell, args):
+        terse = "--terse" in args
+        with_time = "--with-time" in args
+        offset = 0
+        for arg in args:
+            if arg.startswith("--"):
+                continue
+            offset = int(arg)
+            break
+        now = datetime.datetime.now()
+        if offset != 0:
+            now += datetime.timedelta(days=offset)
+        if with_time:
+            fmt = "%Y-%m-%dT%H:%M:%S"
+        else:
+            fmt = "%Y-%m-%d"
+        if terse:
+            fmt = fmt.replace("-", "").replace(":", "").replace("T", "-")
+        shell.outp.print(now.strftime(fmt))
 
 
 class CmdHelp(Cmd):
