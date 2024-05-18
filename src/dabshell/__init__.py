@@ -159,9 +159,17 @@ def find_executable(cwd, executable):
             return os.path.join(venv, executable)
         if os.path.exists(os.path.join(venv, executable+".exe")):
             return os.path.join(venv, executable+".exe")
+        venv = os.path.join(cwd, ".venv/Scripts")
+        if os.path.exists(os.path.join(venv, executable)):
+            return os.path.join(venv, executable)
+        if os.path.exists(os.path.join(venv, executable+".exe")):
+            return os.path.join(venv, executable+".exe")
         return shutil.which(executable)
     else:
         venv = os.path.join(cwd, "venv/bin")
+        if os.path.exists(os.path.join(venv, executable)):
+            return os.path.join(venv, executable)
+        venv = os.path.join(cwd, ".venv/bin")
         if os.path.exists(os.path.join(venv, executable)):
             return os.path.join(venv, executable)
         return shutil.which(executable)
@@ -399,12 +407,17 @@ class Dabshell:
         self.info_pythonproj_s = ""
         self.info_git_cwd = None
         self.info_git_s = ""
+        self.info_venv_cwd = None
+        self.info_venv_s = ""
 
     def init_cmd(self, cmd):
         self.env.set(cmd.name, cmd)
 
     def prompt(self):
         s = ""
+        venv = self.info_venv()
+        if venv:
+            s += venv + " "
         pyproj = self.info_pythonproj()
         if pyproj:
             s += pyproj + " "
@@ -459,6 +472,28 @@ class Dabshell:
                 modified = lines[-1] != "nothing to commit, working tree clean"
                 self.info_git_s = branch, modified
         return self.info_git_s
+
+    def info_venv(self):
+        if self.info_venv_cwd == self.cwd:
+            return self.info_venv_s
+        self.info_venv_cwd = self.cwd
+        self.info_venv_s = ""
+        wd = self.cwd
+        while not os.path.ismount(wd):
+            venvdir = os.path.join(wd, "venv")
+            if os.path.isdir(venvdir):
+                break
+            venvdir = os.path.join(wd, ".venv")
+            if os.path.isdir(venvdir):
+                break
+            wd = os.path.dirname(wd)
+        else:
+            venvdir = None
+        if venvdir:
+            program = find_executable(venvdir, "python")
+            if program:
+                self.info_venv_s = "venv"
+        return self.info_venv_s
 
     def canon(self, path):
         if path is None:
