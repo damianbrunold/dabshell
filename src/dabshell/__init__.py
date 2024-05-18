@@ -518,6 +518,16 @@ class Dabshell:
             if fname.startswith(word):
                 potentials.append(fname)
         if not potentials:
+            pathfile = os.path.join(self.cwd, word)
+            path = os.path.dirname(pathfile)
+            file = os.path.basename(pathfile)
+            if os.path.isdir(path):
+                for fname in os.listdir(path):
+                    if fname.startswith(file):
+                        potentials.append(
+                            self.canon(os.path.join(path, fname))
+                        )
+        if not potentials:
             cmds = find_partial_executable(self.cwd, word)
             if cmds:
                 potentials += cmds
