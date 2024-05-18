@@ -640,8 +640,9 @@ class Dabshell:
             self.outp.out.write(f"{esc}[0K")
             if self.index < len(self.line):
                 self.outp.out.write(f"{esc}[1000D")  # Move all the way left
-                pos = self.index
-                self.outp.out.write(f"{esc}[{pos}C")  # Move cursor to index
+                if self.index > 0:
+                    pos = self.index
+                    self.outp.out.write(f"{esc}[{pos}C")  # Move cursor to index
             self.outp.out.flush()
 
     def execute(self, line):
