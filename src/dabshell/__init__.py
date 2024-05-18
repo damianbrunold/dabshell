@@ -243,7 +243,29 @@ def split_command_quoted(line):
     return parts
 
 
+def replace_vars(s, env):
+    in_single_quote = False
+    in_var = False
+    result = ""
+    var = ""
+    for ch in s:
+        if ch == "{" and not in_single_quote:
+            in_var = True
+        elif ch != "}" and in_var:
+            var += ch
+        elif ch == "}" and in_var:
+            result += env.get(var, "{" + var + "}")
+            in_var = False
+        elif ch == "'":
+            in_single_quote = not in_single_quote
+            result += ch
+        else:
+            result += ch
+    return result
+
+
 def split_command(line, env):
+    line = replace_vars(line, env)
     parts = []
     current_part = ""
     in_quote = False
@@ -272,12 +294,6 @@ def split_command(line, env):
             idx += 1
         elif ch =="\"" and in_quote:
             in_quote = False
-            # make this more efficient?!
-            for name in env.names():
-                current_part = current_part.replace(
-                    "{" + name + "}",
-                    str(env.get(name)),
-                )
             parts.append(current_part)
             current_part = ""
         elif ch == " " and not in_quote:
@@ -301,7 +317,7 @@ class Env:
         result = list(self.mappings.keys())
         if self.parent:
             result += self.parent.names()
-        return sorted(result)
+        return sorted(set(result))
 
     def set(self, name, value):
         self.mappings[name] = value
@@ -359,6 +375,21 @@ class FileOutput:
 
     def print(self, s=""):
         print(s, file=self.out)
+
+
+class StringOutput:
+    def __init__(self):
+        self.out = ""
+
+    def write(self, s):
+        self.out += s
+
+    def print(self, s=""):
+        self.out += s
+        self.out += "\n"
+
+    def value(self):
+        return self.out
 
 
 class CommandFailedException(Exception):
@@ -667,7 +698,7 @@ class Dabshell:
         self.info_pythonproj_cwd = None
         self.info_git_cwd = None
         cmd_ = self.env.get(cmd)
-        if cmd_:
+        if cmd_ and isinstance(cmd_, Cmd):
             cmd_.execute(self, args)
         elif cmd == "exit":
             return False
@@ -837,7 +868,17 @@ class CmdSet(Cmd):
 
     def execute(self, shell, args):
         name = args[0]
-        value = args[1]
+        if args[1] == "eval":
+            scriptshell = Dabshell(shell)
+            scriptshell.env.set("argc", 0)
+            scriptshell.outs = StringOutput()
+            try:
+                scriptshell.execute(" ".join(args[2:]))
+            except CommandFailedException:
+                pass
+            value = scriptshell.outs.value()
+        else:
+            value = " ".join(args[1:])
         shell.env.set(name, value)
 
 
