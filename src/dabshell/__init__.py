@@ -930,7 +930,7 @@ class CmdTail(Cmd):
 
     def help(self):
         return (
-            "[-n <lines>] [--lines=<lines>] <file> ... "
+            "[-n <lines>] [--lines=<lines>] [-f] <file> ... "
             " : prints the last lines of each file"
         )
 
@@ -965,6 +965,16 @@ class CmdTail(Cmd):
                     lines = infile.readlines()
                     for line in lines[-n:]:
                         shell.outs.write(line)
+                    if "-f" in args or "--follow" in args:
+                        while True:
+                            try:
+                                line = infile.readline()
+                                if line:
+                                    shell.outs.write(line)
+                                else:
+                                    time.sleep(1)
+                            except KeyboardInterrupt:
+                                break
 
 
 class CmdHead(Cmd):
