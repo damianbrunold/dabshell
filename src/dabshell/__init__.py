@@ -825,8 +825,16 @@ class CmdLs(Cmd):
             else:
                 path = shell.canon(os.path.join(shell.cwd, args[0]))
         if os.path.exists(path):
-            for fname in sorted(os.listdir(path)):
-                shell.outs.print(fname)
+            if isinstance(shell.outs, StdOutput):
+                for fname in sorted(os.listdir(path)):
+                    fpath = os.path.join(path, fname)
+                    if os.path.isdir(fpath):
+                        shell.outs.print(f"{esc}[34m{fname}{esc}[0m")
+                    else:
+                        shell.outs.print(fname)
+            else:
+                for fname in sorted(os.listdir(path)):
+                    shell.outs.print(fname)
 
 
 class CmdCd(Cmd):
