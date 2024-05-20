@@ -254,7 +254,7 @@ def replace_vars(s, env):
         elif ch != "}" and in_var:
             var += ch
         elif ch == "}" and in_var:
-            result += env.get(var, "{" + var + "}")
+            result += str(env.get(var, "{" + var + "}"))
             var = ""
             in_var = False
         elif ch == "'":
@@ -320,17 +320,6 @@ class Env:
             result += self.parent.names()
         return sorted(set(result))
 
-    def set(self, name, value):
-        self.mappings[name] = value
-
-    def update(self, name, value):
-        if name in self.mappings:
-            self.mappings[name] = value
-        if self.parent:
-            self.parent.update(name, value)
-        else:
-            raise ValueError(f"undefined variable {name}")
-
     def get(self, name, default=None):
         if name in self.mappings:
             return self.mappings[name]
@@ -338,6 +327,18 @@ class Env:
             return self.parent.get(name, default)
         else:
             return default
+
+    def set(self, name, value):
+        self.mappings[name] = value
+
+    def update(self, name, value):
+        if self.get(name):
+            if name in self.mappings:
+                self.mappings[name] = value
+            if self.parent:
+                self.parent.update(name, value)
+        else:
+            self.set(name, value)
 
 
 class StdOutput:
@@ -418,6 +419,7 @@ class Dabshell:
             for name in os.environ:
                 self.env.set("env:" + name, os.environ.get(name, ""))
             self.init_cmd(CmdRun())
+            self.init_cmd(CmdExpr())
             self.init_cmd(CmdScript())
             self.init_cmd(CmdSource())
             self.init_cmd(CmdCd())
@@ -765,6 +767,60 @@ class CmdRun(Cmd):
             shell.oute.print(e)
 
 
+def evaluate_expression(expr, env):
+    # TODO this is rather kludgy, need to implement proper interpreter
+    parts = expr.split(" ")
+    if len(parts) == 3:
+        lhs = evaluate_expression(parts[0], env)
+        op = parts[1]
+        rhs = evaluate_expression(parts[2], env)
+        if op == "<":
+            return int(lhs) < int(rhs)
+        elif op == "<=":
+            return int(lhs) <= int(rhs)
+        elif op == ">":
+            return int(lhs) > int(rhs)
+        elif op == ">=":
+            return int(lhs) >= int(rhs)
+        elif op == "==":
+            return str(lhs) == str(rhs)
+        elif op == "!=":
+            return str(lhs) != str(rhs)
+        elif op == "+":
+            return int(lhs) + int(rhs)
+        elif op == "-":
+            return int(lhs) - int(rhs)
+        elif op == "*":
+            return int(lhs) * int(rhs)
+        elif op == "/":
+            return int(lhs) // int(rhs)
+    elif len(parts) == 1:
+        arg = parts[0]
+        if (
+            'A' <= arg[0] <= 'Z'
+            or 'a' <= arg[0] <= 'z'
+            or arg[0] == '_'
+        ):
+            return env.get(arg)
+        elif arg.startswith("\"") or arg.startswith("'"):
+            return arg[1:-1]
+        else:
+            return int(arg)
+    raise ValueError(f"cannot evaluate {expr}")
+
+
+class CmdExpr(Cmd):
+    def __init__(self):
+         Cmd.__init__(self, "expr")
+
+    def help(self):
+        return "<arg> <op> <arg>   : Evaluates the expression"
+
+    def execute(self, shell, args):
+        print("EXPR", args)
+        return evalute_expression(" ".join(args))
+
+
 class CmdScript(Cmd):
     def __init__(self):
          Cmd.__init__(self, "script")
@@ -780,17 +836,138 @@ class CmdScript(Cmd):
         for idx, arg in enumerate(args):
             scriptshell.env.set(f"arg{idx}", arg)
         with open(scriptfile, encoding="utf8") as infile:
-            for line in infile:
-                line = line.strip()
-                if line and not line.startswith("#"):
-                    try:
-                        scriptshell.execute(line)
-                    except CommandFailedException:
-                        break
+            self.execute_lines(scriptshell, infile.readlines())
         CmdRedirect().execute(shell, ["off"])
 
+    def execute_lines(self, shell, lines):
+        lines = [line.strip() for line in lines]
+        lines = [line for line in lines if line and not line.startswith("#")]
+        stmt, stmt_lines, idx = self.get_statement(lines, 0)
+        while stmt:
+            if stmt == "single":
+                try:
+                    shell.execute(stmt_lines[0])
+                except CommandFailedException:
+                    break
+            elif stmt == "if":
+                condition = stmt_lines[0][len("if "):].strip()
+                body = stmt_lines[1:]
+                value = evaluate_expression(condition, shell.env)
+                if value:
+                    if not self.execute_lines(shell, body):
+                        break
+            elif stmt == "for":
+                parts = [part for part in stmt_lines[0].split(" ") if part]
+                name = parts[1]
+                elements = []
+                for element in parts[3:]:
+                    if "*" in element or "?" in element:
+                        elements_ = glob.glob(
+                            element,
+                            root_dir=shell.cwd,
+                            recursive=True,
+                        )
+                        elements += elements_
+                    else:
+                        elements.append(element)
+                body = stmt_lines[1:]
+                for element in elements:
+                    shell.env.set(name, element)
+                    if not self.execute_lines(shell, body):
+                        break
+            elif stmt == "while":
+                condition = stmt_lines[0][len("while "):]
+                body = stmt_lines[1:]
+                value = evaluate_expression(condition, shell.env)
+                while value:
+                    if not self.execute_lines(shell, body):
+                        break
+                    value = evaluate_expression(condition, shell.env)
+            stmt, stmt_lines, idx = self.get_statement(lines, idx)
+        else:
+            return True
 
-class CmdSource(Cmd):
+    def get_statement(self, lines, idx):
+        if idx >= len(lines):
+            return None, None, None
+        line = lines[idx]
+        if line.startswith("if "):
+            stmt = "if"
+            stmt_lines = [line]
+            idx += 1
+            depth = 0
+            while idx < len(lines):
+                line = lines[idx]
+                if (
+                    line.startswith("if ")
+                    or line.startswith("for ")
+                    or line.startswith("while ")
+                ):
+                    stmt_lines.append(line)
+                    depth += 1
+                elif line == "end":
+                    if depth == 0:
+                        break
+                    else:
+                        stmt_lines.append(line)
+                        depth -= 1
+                else:
+                    stmt_lines.append(line)
+                idx += 1
+            return stmt, stmt_lines, idx + 1
+        elif line.startswith("for "):
+            stmt = "for"
+            stmt_lines = [line]
+            idx += 1
+            depth = 0
+            while idx < len(lines):
+                line = lines[idx]
+                if (
+                    line.startswith("if ")
+                    or line.startswith("for ")
+                    or line.startswith("while ")
+                ):
+                    stmt_lines.append(line)
+                    depth += 1
+                elif line == "end":
+                    if depth == 0:
+                        break
+                    else:
+                        stmt_lines.append(line)
+                        depth -= 1
+                else:
+                    stmt_lines.append(line)
+                idx += 1
+            return stmt, stmt_lines, idx + 1
+        elif line.startswith("while "):
+            stmt = "while"
+            stmt_lines = [line]
+            idx += 1
+            depth = 0
+            while idx < len(lines):
+                line = lines[idx]
+                if (
+                    line.startswith("if ")
+                    or line.startswith("for ")
+                    or line.startswith("while ")
+                ):
+                    stmt_lines.append(line)
+                    depth += 1
+                elif line == "end":
+                    if depth == 0:
+                        break
+                    else:
+                        stmt_lines.append(line)
+                        depth -= 1
+                else:
+                    stmt_lines.append(line)
+                idx += 1
+            return stmt, stmt_lines, idx + 1
+        else:
+            return "single", [line], idx + 1
+
+
+class CmdSource(CmdScript):
     def __init__(self):
          Cmd.__init__(self, "source")
 
@@ -800,13 +977,7 @@ class CmdSource(Cmd):
     def execute(self, shell, args):
         scriptfile = args[0]
         with open(scriptfile, encoding="utf8") as infile:
-            for line in infile:
-                line = line.strip()
-                if line and not line.startswith("#"):
-                    try:
-                        shell.execute(line)
-                    except CommandFailedExeption:
-                        break
+            self.execute_lines(shell, infile.readlines())
 
 
 class CmdLs(Cmd):
@@ -888,6 +1059,8 @@ class CmdSet(Cmd):
             except CommandFailedException:
                 pass
             value = scriptshell.outs.value().strip()
+        elif args[1] == "expr":
+            value = evaluate_expression(" ".join(args[2:]), shell.env)
         else:
             value = " ".join(args[1:])
         shell.env.set(name, value)
@@ -1252,7 +1425,7 @@ class CmdDate(Cmd):
         if terse:
             fmt = fmt.replace("-", "").replace(":", "").replace("T", "-")
         for idx, arg in enumerate(args):
-            if arg == "--format":
+            if arg == "--format" or arg == "--fmt":
                 if idx < len(args)-1:
                     fmt = args[idx+1]
                 break
@@ -1260,7 +1433,7 @@ class CmdDate(Cmd):
         idx = 0
         while idx < len(args):
             arg = args[idx]
-            if arg == "--format":
+            if arg == "--format" or arg == "--fmt":
                 idx += 2
             elif arg.startswith("--"):
                 idx += 1
