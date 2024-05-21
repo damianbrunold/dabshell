@@ -441,6 +441,7 @@ class Dabshell:
             self.init_cmd(CmdRedirect())
             self.init_cmd(CmdHistory())
             self.init_cmd(CmdDate())
+            self.init_cmd(CmdWhich())
             self.init_cmd(CmdHelp())
         self.history = []
         self.history_index = -1
@@ -1403,6 +1404,26 @@ class CmdHistory(Cmd):
             for index, line in enumerate(shell.history):
                 if line.lower().find(query) != -1:
                     shell.outs.print(f"{index} {line}")
+
+
+class CmdWhich(Cmd):
+    def __init__(self):
+        Cmd.__init__(self, "which")
+
+    def help(self):
+        return (
+            "<filename>   : searches filename in the "
+            "PATH and shows the location"
+        )
+
+    def execute(self, shell, args):
+        for arg in args:
+            cmd = shell.env.get(arg)
+            if cmd and isinstance(cmd, Cmd):
+                print("(internal command)")
+            location = find_executable(shell.cwd, arg)
+            if location:
+                shell.outs.print(shell.canon(location))
 
 
 class CmdDate(Cmd):
