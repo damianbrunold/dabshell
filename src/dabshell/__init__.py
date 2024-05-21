@@ -1586,7 +1586,8 @@ class CmdTitle(Cmd):
         )
 
     def execute(self, shell, args):
-        os.system("title " + " ".join(args))
+        if IS_WIN:
+            os.system("title " + " ".join(args))
 
 
 class CmdHelp(Cmd):
