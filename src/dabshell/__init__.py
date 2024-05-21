@@ -431,6 +431,7 @@ class Dabshell:
             self.init_cmd(CmdHead())
             self.init_cmd(CmdTail())
             self.init_cmd(CmdEcho())
+            self.init_cmd(CmdGrep())
             self.init_cmd(CmdCp())
             self.init_cmd(CmdMv())
             self.init_cmd(CmdRm())
@@ -1424,6 +1425,58 @@ class CmdWhich(Cmd):
             location = find_executable(shell.cwd, arg)
             if location:
                 shell.outs.print(shell.canon(location))
+
+
+class CmdGrep(Cmd):
+    def __init__(self):
+        Cmd.__init__(self, "grep")
+
+    def help(self):
+        return (
+            "<pattern> [<location>...]   : searches the pattern in the "
+            "files at location"
+        )
+
+    def execute(self, shell, args):
+        pattern = args[0]
+        locations = args[1:]
+        if not locations:
+            locations = ["."]
+        for path in self.walk(shell.cwd, locations):
+            self.grep(shell, pattern, path)
+
+    def grep(self, shell, pattern, filepath):
+        if filepath.startswith(shell.cwd):
+            relpath = filepath[len(shell.cwd)+1:]
+        else:
+            relpath = filepath
+        with open(filepath, encoding="utf8", errors="ignore") as infile:
+            linenr = 1
+            for line in infile:
+                if re.match(f"^.*{pattern}.*$", line):
+                    line = line.strip()
+                    shell.outs.print(f"{relpath} {linenr}: {line}")
+                linenr += 1
+
+    def walk(self, cwd, locations):
+        for location in locations:
+            if not os.path.isabs(location):
+                location = os.path.normpath(os.path.join(cwd, location))
+                yield from self.walk_dir(location)
+
+    def walk_dir(self, path):
+        if os.path.basename(path) not in [
+            "venv",
+            ".env",
+            "__pycache__",
+            ".git",
+        ]:
+            for filename in os.listdir(path):
+                filepath = os.path.join(path, filename)
+                if os.path.isdir(filepath):
+                    yield from self.walk_dir(filepath)
+                else:
+                    yield filepath
 
 
 class CmdDate(Cmd):
