@@ -1453,7 +1453,7 @@ class CmdGrep(Cmd):
         with open(filepath, encoding="utf8", errors="ignore") as infile:
             linenr = 1
             for line in infile:
-                if re.match(f"^.*{pattern}.*$", line):
+                if re.match(f".*({pattern})", line):
                     line = line.strip()
                     shell.outs.print(f"{relpath} {linenr}: {line}")
                 linenr += 1
