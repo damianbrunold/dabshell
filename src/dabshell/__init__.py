@@ -165,6 +165,10 @@ def find_executable(cwd, executable):
             return os.path.join(venv, executable)
         if os.path.exists(os.path.join(venv, executable+".exe")):
             return os.path.join(venv, executable+".exe")
+        if os.path.exists(os.path.join(cwd, executable)):
+            return os.path.join(cwd, executable)
+        if os.path.exists(os.path.join(cwd, executable+".exe")):
+            return os.path.join(cwd, executable+".exe")
         return shutil.which(executable)
     else:
         venv = os.path.join(cwd, "venv/bin")
@@ -284,7 +288,7 @@ def split_command(line, env):
             and in_quote
         ):
             current_part += "\""
-            idx += 1
+            idx += 2
         elif (
             ch == "\\"
             and idx < len(line) - 1
@@ -292,7 +296,7 @@ def split_command(line, env):
             and in_quote
         ):
             current_part += "\\"
-            idx += 1
+            idx += 2
         elif ch =="\"" and in_quote:
             in_quote = False
             parts.append(current_part)
@@ -443,6 +447,7 @@ class Dabshell:
             self.init_cmd(CmdHistory())
             self.init_cmd(CmdDate())
             self.init_cmd(CmdWhich())
+            self.init_cmd(CmdTitle())
             self.init_cmd(CmdHelp())
         self.history = []
         self.history_index = -1
@@ -769,7 +774,7 @@ class CmdRun(Cmd):
             shell.oute.print(e)
 
 
-def evaluate_expression(expr, env):
+def evaluate_expression(expr, env, cwd):
     # TODO this is rather kludgy, need to implement proper interpreter
     parts = expr.split(" ")
     if len(parts) == 3:
@@ -796,6 +801,37 @@ def evaluate_expression(expr, env):
             return int(lhs) * int(rhs)
         elif op == "/":
             return int(lhs) // int(rhs)
+    elif len(parts) == 2:
+        predicate = parts[0]
+        value = parts[1]
+        if predicate == "exists":
+            if not os.path.isabs(value):
+                value = os.path.join(cwd, value)
+            if os.path.exists(value):
+                return "yes"
+            else:
+                return ""
+        elif predicate == "isfile":
+            if not os.path.isabs(value):
+                value = os.path.join(cwd, value)
+            if os.path.isfile(value):
+                return "yes"
+            else:
+                return ""
+        elif predicate == "isdir":
+            if not os.path.isabs(value):
+                value = os.path.join(cwd, value)
+            if os.path.isdir(value):
+                return "yes"
+            else:
+                return ""
+        elif predicate == "nexists":
+            if not os.path.isabs(value):
+                value = os.path.join(cwd, value)
+            if not os.path.exists(value):
+                return "yes"
+            else:
+                return ""
     elif len(parts) == 1:
         arg = parts[0]
         if (
@@ -832,6 +868,8 @@ class CmdScript(Cmd):
 
     def execute(self, shell, args):
         scriptfile = args[0]
+        if not os.path.isabs(scriptfile):
+            scriptfile = os.path.join(shell.cwd, scriptfile)
         args = args[1:]
         scriptshell = Dabshell(shell)
         scriptshell.env.set("argc", len(args))
@@ -854,7 +892,7 @@ class CmdScript(Cmd):
             elif stmt == "if":
                 condition = stmt_lines[0][len("if "):].strip()
                 body = stmt_lines[1:]
-                value = evaluate_expression(condition, shell.env)
+                value = evaluate_expression(condition, shell.env, shell.cwd)
                 if value:
                     if not self.execute_lines(shell, body):
                         break
@@ -880,11 +918,15 @@ class CmdScript(Cmd):
             elif stmt == "while":
                 condition = stmt_lines[0][len("while "):]
                 body = stmt_lines[1:]
-                value = evaluate_expression(condition, shell.env)
+                value = evaluate_expression(condition, shell.env, shell.cwd)
                 while value:
                     if not self.execute_lines(shell, body):
                         break
-                    value = evaluate_expression(condition, shell.env)
+                    value = evaluate_expression(
+                        condition,
+                        shell.env,
+                        shell.cwd,
+                    )
             stmt, stmt_lines, idx = self.get_statement(lines, idx)
         else:
             return True
@@ -978,6 +1020,8 @@ class CmdSource(CmdScript):
 
     def execute(self, shell, args):
         scriptfile = args[0]
+        if not os.path.isabs(scriptfile):
+            scriptfile = os.path.join(shell.cwd, scriptfile)
         with open(scriptfile, encoding="utf8") as infile:
             self.execute_lines(shell, infile.readlines())
 
@@ -1062,7 +1106,11 @@ class CmdSet(Cmd):
                 pass
             value = scriptshell.outs.value().strip()
         elif args[1] == "expr":
-            value = evaluate_expression(" ".join(args[2:]), shell.env)
+            value = evaluate_expression(
+                " ".join(args[2:]),
+                shell.env,
+                shell.cwd,
+            )
         else:
             value = " ".join(args[1:])
         shell.env.set(name, value)
@@ -1217,6 +1265,8 @@ class CmdCp(Cmd):
     def execute(self, shell, args):
         sources = args[:-1]
         dest = args[-1]
+        if not os.path.isabs(dest):
+            dest = os.path.join(shell.cwd, dest)
         if (
             (not os.path.exists(dest) or os.path.isfile(dest))
             and len(sources) > 1
@@ -1224,6 +1274,8 @@ class CmdCp(Cmd):
             shell.oute.print("ERR: cannot copy multiple files to a file")
             raise CommandFailedException()
         for source in sources:
+            if not os.path.isabs(source):
+                source = os.path.join(shell.cwd, source)
             try:
                 shutil.copy(source, dest)
             except Exception as e:
@@ -1241,6 +1293,8 @@ class CmdMv(Cmd):
     def execute(self, shell, args):
         sources = args[:-1]
         dest = args[-1]
+        if not os.path.isabs(dest):
+            dest = os.path.join(shell.cwd, dest)
         if (
             (not os.path.exists(dest) or os.path.isfile(dest))
             and len(sources) > 1
@@ -1248,6 +1302,8 @@ class CmdMv(Cmd):
             shell.oute.print("ERR: cannot move multiple files to a file")
             raise CommandFailedException()
         for source in sources:
+            if not os.path.isabs(source):
+                source = os.path.join(shell.cwd, source)
             try:
                 if (
                     os.path.isdir(dest)
@@ -1518,6 +1574,19 @@ class CmdDate(Cmd):
         if offset != 0:
             now += datetime.timedelta(days=offset)
         shell.outs.print(now.strftime(fmt))
+
+
+class CmdTitle(Cmd):
+    def __init__(self):
+        Cmd.__init__(self, "title")
+
+    def help(self):
+        return (
+            "<title>   : sets the window title"
+        )
+
+    def execute(self, shell, args):
+        os.system("title " + " ".join(args))
 
 
 class CmdHelp(Cmd):
