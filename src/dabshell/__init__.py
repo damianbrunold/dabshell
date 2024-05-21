@@ -515,15 +515,15 @@ class Dabshell:
             p = subprocess.run(
                 [
                     shutil.which("git"),
-                    "status",
+                    "status", "-s", "-b",
                 ],
                 capture_output=True,
                 cwd=self.cwd,
             )
             lines = p.stdout.decode("utf8").splitlines()
             if lines:
-                branch = lines[0].split(" ")[2]
-                modified = lines[-1] != "nothing to commit, working tree clean"
+                branch = lines[0][2:].strip().split(".")[0]
+                modified = lines[1:] != []
                 self.info_git_s = branch, modified
         return self.info_git_s
 
