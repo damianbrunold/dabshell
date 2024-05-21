@@ -1502,6 +1502,8 @@ class CmdGrep(Cmd):
             self.grep(shell, pattern, path)
 
     def grep(self, shell, pattern, filepath):
+        if not os.path.exists(filepath):
+            return
         if filepath.startswith(shell.cwd):
             relpath = filepath[len(shell.cwd)+1:]
         else:
@@ -1516,8 +1518,17 @@ class CmdGrep(Cmd):
 
     def walk(self, cwd, locations):
         for location in locations:
-            if not os.path.isabs(location):
-                location = os.path.normpath(os.path.join(cwd, location))
+            if "*" in location or "?" in location:
+                locs = glob.glob(location)
+                if not locs:
+                    locs = glob.glob(
+                        os.path.normpath(os.path.join(cwd, location))
+                    )
+                for loc in locs:
+                    yield from self.walk_dir(loc)
+            else:
+                if not os.path.isabs(location):
+                    location = os.path.normpath(os.path.join(cwd, location))
                 yield from self.walk_dir(location)
 
     def walk_dir(self, path):
@@ -1527,12 +1538,15 @@ class CmdGrep(Cmd):
             "__pycache__",
             ".git",
         ]:
-            for filename in os.listdir(path):
-                filepath = os.path.join(path, filename)
-                if os.path.isdir(filepath):
-                    yield from self.walk_dir(filepath)
-                else:
-                    yield filepath
+            if os.path.isdir(path):
+                for filename in os.listdir(path):
+                    filepath = os.path.join(path, filename)
+                    if os.path.isdir(filepath):
+                        yield from self.walk_dir(filepath)
+                    else:
+                        yield filepath
+            else:
+                yield path
 
 
 class CmdDate(Cmd):
