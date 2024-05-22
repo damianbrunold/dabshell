@@ -1334,6 +1334,8 @@ class CmdTree(Cmd):
         return "<dir> <filter>... : displays file tree"
 
     def execute(self, shell, args):
+        if not args:
+            args = ["."]
         path = args[0]
         filters = args[1:]
         if not os.path.isabs(path):
@@ -1356,7 +1358,9 @@ class CmdTree(Cmd):
         for fname in os.listdir(path):
             if fname in [".git", "venv", ".env", "__pycache__"]:
                 continue
-            fpath = os.path.join(path, fname)
+            if fname.endswith(".egg-info"):
+                continue
+            fpath = os.path.normpath(os.path.join(path, fname))
             if os.path.isdir(fpath):
                 yield from self.walk(fpath)
             else:
