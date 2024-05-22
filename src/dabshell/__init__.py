@@ -523,7 +523,10 @@ class Dabshell:
             )
             lines = p.stdout.decode("utf8").splitlines()
             if lines:
-                branch = lines[0][2:].strip().split(".")[0]
+                if lines[0].startswith("## No commits yet on"):
+                    branch = lines[0][2:].strip().split(" ")[-1]
+                else:
+                    branch = lines[0][2:].strip().split(".")[0]
                 modified = lines[1:] != []
                 self.info_git_s = branch, modified
         return self.info_git_s
