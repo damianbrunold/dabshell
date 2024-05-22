@@ -274,7 +274,8 @@ def split_command(line, env):
     parts = []
     current_part = ""
     in_quote = False
-    for idx in range(len(line)):
+    idx = 0
+    while idx < len(line):
         ch = line[idx]
         if ch == "\"" and not in_quote:
             if current_part:
@@ -288,7 +289,7 @@ def split_command(line, env):
             and in_quote
         ):
             current_part += "\""
-            idx += 2
+            idx += 1
         elif (
             ch == "\\"
             and idx < len(line) - 1
@@ -296,7 +297,7 @@ def split_command(line, env):
             and in_quote
         ):
             current_part += "\\"
-            idx += 2
+            idx += 1
         elif ch =="\"" and in_quote:
             in_quote = False
             parts.append(current_part)
@@ -776,7 +777,8 @@ class CmdRun(Cmd):
 
 def evaluate_expression(expr, env, cwd):
     # TODO this is rather kludgy, need to implement proper interpreter
-    parts = expr.split(" ")
+    a, b = split_command(expr, env)
+    parts = [a, *b]
     if len(parts) == 3:
         lhs = evaluate_expression(parts[0], env)
         op = parts[1]
