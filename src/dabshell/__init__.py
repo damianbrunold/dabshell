@@ -713,6 +713,7 @@ class Dabshell:
         # trigger prompt info update
         self.info_pythonproj_cwd = None
         self.info_git_cwd = None
+        self.info_venv_cwd = None
         cmd_ = self.env.get(cmd)
         if cmd_ and isinstance(cmd_, Cmd):
             cmd_.execute(self, args)
