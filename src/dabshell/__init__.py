@@ -442,6 +442,8 @@ class Dabshell:
             self.init_cmd(CmdRm())
             self.init_cmd(CmdRmdir())
             self.init_cmd(CmdMkdir())
+            self.init_cmd(CmdTouch())
+            self.init_cmd(CmdTree())
             self.init_cmd(CmdDirname())
             self.init_cmd(CmdBasename())
             self.init_cmd(CmdRedirect())
@@ -1313,10 +1315,73 @@ class CmdMv(Cmd):
             try:
                 if (
                     os.path.isdir(dest)
-                    and os.path.isfile(os.path.join(dest, os.path.basename(source)))
+                    and os.path.isfile(
+                        os.path.join(dest, os.path.basename(source))
+                    )
                 ):
                     os.remove(os.path.join(dest, os.path.basename(source)))
                 shutil.move(source, dest)
+            except Exception as e:
+                shell.oute.print(str(e))
+                raise CommandFailedException()
+
+
+class CmdTree(Cmd):
+    def __init__(self):
+        Cmd.__init__(self, "tree")
+
+    def help(self):
+        return "<dir> <filter>... : displays file tree"
+
+    def execute(self, shell, args):
+        path = args[0]
+        filters = args[1:]
+        if not os.path.isabs(path):
+            path = os.path.join(shell.cwd, path)
+        if os.path.isdir(path):
+            for path_ in self.walk(path):
+                if filters:
+                    fname = os.path.basename(path_)
+                    for flt in filters:
+                        if flt.startswith("*") and fname.endswith(flt[1:]):
+                            print(path_)
+                            break
+                        elif flt.endswith("*") and fname.startswith(flt[:-1]):
+                            print(path_)
+                            break
+                else:
+                    print(path_)
+
+    def walk(self, path):
+        for fname in os.listdir(path):
+            if fname in [".git", "venv", ".env", "__pycache__"]:
+                continue
+            fpath = os.path.join(path, fname)
+            if os.path.isdir(fpath):
+                yield from self.walk(fpath)
+            else:
+                yield fpath
+
+
+class CmdTouch(Cmd):
+    def __init__(self):
+        Cmd.__init__(self, "touch")
+
+    def help(self):
+        return "<filename>... : creates/changes the files"
+
+    def execute(self, shell, args):
+        for path in args:
+            if not os.path.isabs(path):
+                path = os.path.join(shell.cwd, path)
+            if os.path.isdir(path):
+                continue
+            try:
+                print(path)
+                try:
+                    os.utime(path)
+                except OSError:
+                    open(path, "a").close()
             except Exception as e:
                 shell.oute.print(str(e))
                 raise CommandFailedException()
@@ -1331,13 +1396,17 @@ class CmdRm(Cmd):
 
     def execute(self, shell, args):
         for arg in args:
-            for path in glob.glob(arg, root_dir=shell.cwd, recursive=True):
-                if os.path.isfile(path):
-                    try:
-                        os.remove(path)
-                    except Exception as e:
-                        shell.oute.print(str(e))
-                        raise CommandFailedException()
+            path = arg
+            if not os.path.isabs(path):
+                path = os.path.join(shell.cwd, path)
+            for path in glob.glob(path):
+                if not os.path.isfile(path):
+                    continue
+                try:
+                    os.remove(path)
+                except Exception as e:
+                    shell.oute.print(str(e))
+                    raise CommandFailedException()
 
 
 class CmdMkdir(Cmd):
@@ -1348,7 +1417,9 @@ class CmdMkdir(Cmd):
         return "<dir> : creates the directory"
 
     def execute(self, shell, args):
-        path = os.path.join(shell.cwd, args[0])
+        path = args[0]
+        if not os.path.isabs(path):
+            path = os.path.join(shell.cwd, path)
         if not os.path.exists(path):
             try:
                 os.makedirs(path, exist_ok=True)
@@ -1365,7 +1436,9 @@ class CmdRmdir(Cmd):
         return "<dir> : deletes the directory"
 
     def execute(self, shell, args):
-        path = os.path.join(shell.cwd, args[0])
+        path = args[0]
+        if not os.path.isabs(path):
+            path = os.path.join(shell.cwd, path)
         if os.path.isdir(path):
             try:
                 # TODO only delete if empty? otherwise require -rf option?
