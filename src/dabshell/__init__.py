@@ -10,7 +10,7 @@ import time
 import tomllib
 
 
-max_line_length = 50
+max_line_length = 80
 
 esc = "\u001b"
 
