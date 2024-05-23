@@ -570,6 +570,7 @@ class Dabshell:
             if fname.startswith(word):
                 potentials.append(fname)
         if not potentials:
+            # find completions for relative paths
             pathfile = os.path.join(self.cwd, word)
             path = os.path.dirname(pathfile)
             file = os.path.basename(pathfile)
@@ -580,6 +581,7 @@ class Dabshell:
                             self.canon(os.path.join(path, fname))
                         )
         if not potentials:
+            # find completions for executables in e.g. venv and PATH
             cmds = find_partial_executable(self.cwd, word)
             if cmds:
                 potentials += cmds
