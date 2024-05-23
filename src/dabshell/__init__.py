@@ -455,6 +455,7 @@ class Dabshell:
             self.init_cmd(CmdWhich())
             self.init_cmd(CmdTitle())
             self.init_cmd(CmdHelp())
+            self.init_cmd(CmdOptions())
         self.history = []
         self.history_index = -1
         self.history_current = ""
@@ -462,7 +463,9 @@ class Dabshell:
         self.inp = RawInput()
         self.line = ""
         self.index = 0
-        self.log = False
+        self.options = {
+            "echo": "off",
+        }
         self.info_pythonproj_cwd = None
         self.info_pythonproj_s = ""
         self.info_git_cwd = None
@@ -472,6 +475,9 @@ class Dabshell:
 
     def init_cmd(self, cmd):
         self.env.set(cmd.name, cmd)
+
+    def option_set(self, name):
+        return self.options.get(name) in ["on", "yes", "y", "1", "true"]
 
     def prompt(self):
         s = ""
@@ -743,7 +749,7 @@ class Dabshell:
             self.history.append(line)
             self.history_index = -1
             self.history_current = ""
-        if self.log:
+        if self.option_set("echo"):
             self.outs.print(f":: {cmd} {args}")
         # trigger prompt info update
         self.info_pythonproj_cwd = None
@@ -777,6 +783,26 @@ class Cmd:
         return self.name
 
 
+class CmdOptions(Cmd):
+    def __init__(self):
+         Cmd.__init__(self, "option")
+
+    def help(self):
+        return "<option> [<value>]   : gets/sets options"
+
+    def execute(self, shell, args):
+        option = args[0]
+        if len(args) > 1:
+            value = args[1]
+            if value in ["on", "1", "yes", "y", "true"]:
+                value = "on"
+            else:
+                value = "off"
+            shell.options[option] = value
+        else:
+            shell.outs.print(shell.options.get(option, ""))
+
+
 class CmdRun(Cmd):
     def __init__(self):
          Cmd.__init__(self, "run")
@@ -795,8 +821,9 @@ class CmdRun(Cmd):
             elif executable.endswith(".dsh"):
                 shell.env.get("script").execute(shell, [executable, *args])
             else:
-                if shell.log:
-                    shell.outs.print(f":: {executable}")
+                if shell.option_set("echo"):
+                    # TODO properly quote args if necessary
+                    shell.outs.print(f":: {executable} {' '.join(args)}")
                 p = subprocess.run(
                     [
                         executable,
