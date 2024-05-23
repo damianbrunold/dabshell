@@ -10,7 +10,7 @@ import time
 import tomllib
 
 
-max_line_length = 80
+max_line_length = 50
 
 esc = "\u001b"
 
@@ -709,14 +709,29 @@ class Dabshell:
                 self.line = pre + key + post
                 self.index += 1
 
-            self.outp.out.write(f"{esc}[1000D")  # Move all the way left
-            self.outp.out.write(self.line)
+            # Move all the way left
+            self.outp.out.write(f"{esc}[1000D")
+            line = self.line
+            index = self.index
+            if len(line) > max_line_length:
+                start = index - max_line_length // 2
+                end = index + max_line_length // 2
+                if start < 0:
+                    start = 0
+                    end = max_line_length
+                elif end > len(line):
+                    end = len(line)
+                    start = end - max_line_length
+                index -= start
+                line = line[start:end]
+            self.outp.out.write(line)
             self.outp.out.write(f"{esc}[0K")
             if self.index < len(self.line):
-                self.outp.out.write(f"{esc}[1000D")  # Move all the way left
-                if self.index > 0:
-                    pos = self.index
-                    self.outp.out.write(f"{esc}[{pos}C")  # Move cursor to index
+                # Move all the way left
+                self.outp.out.write(f"{esc}[1000D")
+                if index > 0:
+                    # Move cursor to index
+                    self.outp.out.write(f"{esc}[{index}C")
             self.outp.out.flush()
 
     def execute(self, line):
