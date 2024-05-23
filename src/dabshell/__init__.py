@@ -10,6 +10,8 @@ import time
 import tomllib
 
 
+max_line_length = 80
+
 esc = "\u001b"
 
 IS_WIN = platform.system() == "Windows"
@@ -473,20 +475,33 @@ class Dabshell:
 
     def prompt(self):
         s = ""
+        clean_s = ""
         venv = self.info_venv()
         if venv:
             s += venv + " "
+            clean_s += venv + " "
         pyproj = self.info_pythonproj()
         if pyproj:
             s += pyproj + " "
+            clean_s += pyproj + " "
         branch, modified = self.info_git()
         if branch:
             if modified:
                 s += f"{esc}[31m" + branch + "*" + f"{esc}[0m"
+                clean_s += branch + "*"
             else:
                 s += f"{esc}[32m" + branch + f"{esc}[0m"
+                clean_s += branch
             s += " "
-        return s + self.cwd
+            clean_s += " "
+        result = s + self.cwd
+        if len(result) > max_line_length:
+            avail = max_line_length - len(clean_s) - 3
+            if avail > 0:
+                idx = len(self.cwd) - avail
+                truncated = self.cwd[idx:]
+                result = s + "..." + truncated
+        return result
 
     def info_pythonproj(self):
         if self.info_pythonproj_cwd == self.cwd:
