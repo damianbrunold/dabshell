@@ -153,54 +153,55 @@ class RawInput:
         )
 
 
+def find_executable_(path, executable):
+    fullpath = os.path.join(path, executable)
+    if IS_WIN and not os.path.exists(fullpath):
+        fullpath = os.path.join(path, executable + ".exe")
+    if not os.path.exists(fullpath):
+        fullpath = os.path.join(path, executable + ".dsh")
+    if not os.path.exists(fullpath):
+        fullpath = None
+    return fullpath
+
+
 def find_executable(cwd, executable):
-    if IS_WIN:
-        venv = os.path.join(cwd, "venv/Scripts")
-        if os.path.exists(os.path.join(venv, executable)):
-            return os.path.join(venv, executable)
-        if os.path.exists(os.path.join(venv, executable+".exe")):
-            return os.path.join(venv, executable+".exe")
-        venv = os.path.join(cwd, ".venv/Scripts")
-        if os.path.exists(os.path.join(venv, executable)):
-            return os.path.join(venv, executable)
-        if os.path.exists(os.path.join(venv, executable+".exe")):
-            return os.path.join(venv, executable+".exe")
-        if os.path.exists(os.path.join(cwd, executable)):
-            return os.path.join(cwd, executable)
-        if os.path.exists(os.path.join(cwd, executable+".exe")):
-            return os.path.join(cwd, executable+".exe")
-        return shutil.which(executable)
-    else:
-        venv = os.path.join(cwd, "venv/bin")
-        if os.path.exists(os.path.join(venv, executable)):
-            return os.path.join(venv, executable)
-        venv = os.path.join(cwd, ".venv/bin")
-        if os.path.exists(os.path.join(venv, executable)):
-            return os.path.join(venv, executable)
-        return shutil.which(executable)
+    scriptfolder = "Scripts" if IS_WIN else "bin"
+    venv = os.path.join(cwd, "venv", scriptfolder)
+    result = find_executable_(venv, executable)
+    if not result:
+        venv = os.path.join(cwd, ".venv", scriptfolder)
+        result = find_executable_(venv, executable)
+    if not result:
+        result = find_executable_(cwd, executable)
+    if not result:
+        result = shutil.which(executable)
+    return result
+
+
+def collect_partial_executables(path, word, results):
+    if not os.path.isdir(path):
+        return
+    for fname in os.listdir(path):
+        if fname.startswith(word):
+            if fname.endswith(".exe") or fname.endswith(".dsh"):
+                fname = fname[:-4]
+            results.append(fname)
 
 
 def find_partial_executable(cwd, word):
     results = []
-    if IS_WIN:
-        venv = os.path.join(cwd, "venv\\Scripts")
-    else:
-        venv = os.path.join(cwd, "venv/bin")
+    scriptfolder = "Scripts" if IS_WIN else "bin"
+    venv = os.path.join(cwd, "venv", scriptfolder)
     if os.path.isdir(venv):
-        for fname in os.listdir(venv):
-            if fname.startswith(word):
-                if fname.endswith(".exe"):
-                    fname = fname[:-4]
-                results.append(fname)
+        collect_partial_executables(venv, word, results)
+    if not results:
+        venv = os.path.join(cwd, ".venv", scriptfolder)
+        collect_partial_executables(venv, word, results)
     if not results:
         for path in os.environ.get("PATH", "").split(os.pathsep):
             if not os.path.exists(path):
                 continue
-            for fname in os.listdir(path):
-                if fname.startswith(word):
-                    if fname.endswith(".exe"):
-                        fname = fname[:-4]
-                    results.append(fname)
+            collect_partial_executables(path, word, results)
     return sorted(results)
 
 
@@ -759,6 +760,8 @@ class CmdRun(Cmd):
             if executable is None:
                 shell.oute.print(f"ERR: {cmd} not found")
                 raise CommandFailedException()
+            elif executable.endswith(".dsh"):
+                shell.env.get("script").execute(shell, [executable, *args])
             else:
                 if shell.log:
                     shell.outs.print(f":: {executable}")
