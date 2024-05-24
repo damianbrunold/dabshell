@@ -317,6 +317,15 @@ def split_command(line, env):
     return parts[0], parts[1:]
 
 
+def quote_arg(arg):
+    if " " in arg or "\"" in arg or "\'" in arg or "\\" in arg:
+        arg = arg.replace("\\", "\\\\")
+        arg = arg.replace("\"", "\\\"")
+        return "\"" + arg + "\""
+    else:
+        return arg
+
+
 class Env:
     def __init__(self, parent=None):
         self.mappings = {}
@@ -756,20 +765,25 @@ class Dabshell:
             self.history_index = -1
             self.history_current = ""
         if self.option_set("echo"):
-            self.outs.print(f":: {cmd} {args}")
+            self.outs.print(
+                f":: {cmd} {' '.join([quote_arg(a) for a in args])}"
+            )
         # trigger prompt info update
         self.info_pythonproj_cwd = None
         self.info_git_cwd = None
         self.info_venv_cwd = None
-        cmd_ = self.env.get(cmd)
-        if cmd_ and isinstance(cmd_, Cmd):
-            cmd_.execute(self, args)
-        elif cmd == "exit":
-            return False
-        elif cmd.endswith(".dsh"):
-            self.env.get("script").execute(self, [cmd, *args])
-        else:
-            self.env.get("run").execute(self, [cmd, *args])
+        try:
+            cmd_ = self.env.get(cmd)
+            if cmd_ and isinstance(cmd_, Cmd):
+                cmd_.execute(self, args)
+            elif cmd == "exit":
+                return False
+            elif cmd.endswith(".dsh"):
+                self.env.get("script").execute(self, [cmd, *args])
+            else:
+                self.env.get("run").execute(self, [cmd, *args])
+        except KeyboardInterrupt:
+            pass
         return True
 
 
@@ -827,9 +841,6 @@ class CmdRun(Cmd):
             elif executable.endswith(".dsh"):
                 shell.env.get("script").execute(shell, [executable, *args])
             else:
-                if shell.option_set("echo"):
-                    # TODO properly quote args if necessary
-                    shell.outs.print(f":: {executable} {' '.join(args)}")
                 p = subprocess.run(
                     [
                         executable,
@@ -854,9 +865,9 @@ def evaluate_expression(expr, env, cwd):
     a, b = split_command(expr, env)
     parts = [a, *b]
     if len(parts) == 3:
-        lhs = evaluate_expression(parts[0], env)
+        lhs = evaluate_expression(parts[0], env, cwd)
         op = parts[1]
-        rhs = evaluate_expression(parts[2], env)
+        rhs = evaluate_expression(parts[2], env, cwd)
         if op == "<":
             return int(lhs) < int(rhs)
         elif op == "<=":
