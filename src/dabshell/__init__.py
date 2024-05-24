@@ -1,5 +1,6 @@
 import datetime
 import glob
+import io
 import os
 import platform
 import re
@@ -398,17 +399,17 @@ class FileOutput:
 
 class StringOutput:
     def __init__(self):
-        self.out = ""
+        self.out = io.StringIO()
 
     def write(self, s):
-        self.out += s
+        self.out.write(s)
 
     def print(self, s=""):
-        self.out += s
-        self.out += "\n"
+        self.out.write(s)
+        self.out.write("\n")
 
     def value(self):
-        return self.out
+        return self.out.getvalue()
 
 
 class CommandFailedException(Exception):
@@ -856,6 +857,19 @@ class CmdRun(Cmd):
                 raise CommandFailedException()
             elif executable.endswith(".dsh"):
                 shell.env.get("script").execute(shell, [executable, *args])
+            elif isinstance(shell.outs, StringOutput):
+                p = subprocess.run(
+                    [
+                        executable,
+                        *args,
+                    ],
+                    cwd=shell.cwd,
+                    capture_output=True,
+                )
+                shell.outs.write(p.stdout.decode("utf8"))
+                shell.oute.write(p.stderr.decode("utf8"))
+                if p.returncode != 0:
+                    raise CommandFailedException()
             else:
                 p = subprocess.run(
                     [
