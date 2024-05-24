@@ -1403,18 +1403,27 @@ class CmdTree(Cmd):
         if not os.path.isabs(path):
             path = os.path.join(shell.cwd, path)
         if os.path.isdir(path):
-            for path_ in self.walk(path):
-                if filters:
-                    fname = os.path.basename(path_)
-                    for flt in filters:
-                        if flt.startswith("*") and fname.endswith(flt[1:]):
-                            print(path_)
-                            break
-                        elif flt.endswith("*") and fname.startswith(flt[:-1]):
-                            print(path_)
-                            break
-                else:
-                    print(path_)
+            try:
+                for path_ in self.walk(path):
+                    if filters:
+                        fname = os.path.basename(path_)
+                        for flt in filters:
+                            if (
+                                flt.startswith("*") and
+                                fname.endswith(flt[1:])
+                            ):
+                                print(path_)
+                                break
+                            elif (
+                                flt.endswith("*") and
+                                fname.startswith(flt[:-1])
+                            ):
+                                print(path_)
+                                break
+                    else:
+                        print(path_)
+            except KeyboardInterrupt:
+                pass
 
     def walk(self, path):
         for fname in os.listdir(path):
@@ -1643,8 +1652,11 @@ class CmdGrep(Cmd):
         locations = args[1:]
         if not locations:
             locations = ["."]
-        for path in self.walk(shell.cwd, locations):
-            self.grep(shell, pattern, path)
+        try:
+            for path in self.walk(shell.cwd, locations):
+                self.grep(shell, pattern, path)
+        except KeyboardInterrupt:
+            pass
 
     def grep(self, shell, pattern, filepath):
         if not os.path.exists(filepath):
