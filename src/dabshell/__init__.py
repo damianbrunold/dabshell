@@ -1402,6 +1402,11 @@ class CmdTree(Cmd):
         filters = args[1:]
         if not os.path.isabs(path):
             path = os.path.join(shell.cwd, path)
+        if not os.path.isdir(path):
+            filters = [path, *args]
+            path = "."
+        if not os.path.isabs(path):
+            path = os.path.join(shell.cwd, path)
         if os.path.isdir(path):
             for path_ in self.walk(path):
                 if filters:
