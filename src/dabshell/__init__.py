@@ -442,7 +442,7 @@ class Dabshell:
             for name in os.environ:
                 self.env.set("env:" + name, os.environ.get(name, ""))
             self.init_cmd(CmdRun())
-            self.init_cmd(CmdExpr())
+            self.init_cmd(CmdEval())
             self.init_cmd(CmdScript())
             self.init_cmd(CmdSource())
             self.init_cmd(CmdCd())
@@ -950,15 +950,17 @@ def evaluate_expression(expr, env, cwd):
     raise ValueError(f"cannot evaluate {expr}")
 
 
-class CmdExpr(Cmd):
+class CmdEval(Cmd):
     def __init__(self):
-         Cmd.__init__(self, "expr")
+         Cmd.__init__(self, "eval")
 
     def help(self):
-        return "<arg> <op> <arg>   : Evaluates the expression"
+        return (
+            "(<arg> <op> <arg> | <predicate> <arg>  | <arg>)   "
+            ": Evaluates the expression"
+        )
 
     def execute(self, shell, args):
-        print("EXPR", args)
         return evalute_expression(" ".join(args))
 
 
@@ -1200,7 +1202,7 @@ class CmdSet(Cmd):
 
     def execute(self, shell, args):
         name = args[0]
-        if args[1] == "eval":
+        if args[1] == "exec":
             scriptshell = Dabshell(shell)
             scriptshell.env.set("argc", 0)
             scriptshell.outs = StringOutput()
@@ -1209,7 +1211,7 @@ class CmdSet(Cmd):
             except CommandFailedException:
                 pass
             value = scriptshell.outs.value().strip()
-        elif args[1] == "expr":
+        elif args[1] == "eval":
             value = evaluate_expression(
                 " ".join(args[2:]),
                 shell.env,
