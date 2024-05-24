@@ -317,6 +317,15 @@ def split_command(line, env):
     return parts[0], parts[1:]
 
 
+def quote_arg(arg):
+    if " " in arg or "\"" in arg or "\'" in arg or "\\" in arg:
+        arg = arg.replace("\\", "\\\\")
+        arg = arg.replace("\"", "\\\"")
+        return "\"" + arg + "\""
+    else:
+        return arg
+
+
 class Env:
     def __init__(self, parent=None):
         self.mappings = {}
@@ -416,6 +425,8 @@ class Dabshell:
             self.oute = parent_shell.oute
             self.outs_old = parent_shell.outs_old
             self.oute_old = parent_shell.oute_old
+            self.options = {}
+            self.options.update(parent_shell.options)
         else:
             self.cwd = self.canon(".")
             self.env = Env()
@@ -424,10 +435,14 @@ class Dabshell:
             self.oute = StdError()
             self.outs_old = None
             self.oute_old = None
+            self.options = {
+                "echo": "off",
+                "stop-on-error": "on",
+            }
             for name in os.environ:
                 self.env.set("env:" + name, os.environ.get(name, ""))
             self.init_cmd(CmdRun())
-            self.init_cmd(CmdExpr())
+            self.init_cmd(CmdEval())
             self.init_cmd(CmdScript())
             self.init_cmd(CmdSource())
             self.init_cmd(CmdCd())
@@ -455,6 +470,7 @@ class Dabshell:
             self.init_cmd(CmdWhich())
             self.init_cmd(CmdTitle())
             self.init_cmd(CmdHelp())
+            self.init_cmd(CmdOption())
             self.init_cmd(CmdOptions())
         self.history = []
         self.history_index = -1
@@ -463,9 +479,6 @@ class Dabshell:
         self.inp = RawInput()
         self.line = ""
         self.index = 0
-        self.options = {
-            "echo": "off",
-        }
         self.info_pythonproj_cwd = None
         self.info_pythonproj_s = ""
         self.info_git_cwd = None
@@ -627,7 +640,13 @@ class Dabshell:
         while True:
             key = self.inp.getch()
             if key == KEY_CTRL_C:
-                break
+                if self.line == "":
+                    break
+                else:
+                    self.outp.write("\n" + self.prompt() + "\n")
+                    self.line = ""
+                    self.index = 0
+                    continue
             elif key == KEY_LF or key == KEY_CR:
                 if re.match("^![0-9]+$", self.line):
                     hidx = int(self.line[1:])
@@ -750,20 +769,25 @@ class Dabshell:
             self.history_index = -1
             self.history_current = ""
         if self.option_set("echo"):
-            self.outs.print(f":: {cmd} {args}")
+            self.outs.print(
+                f":: {cmd} {' '.join([quote_arg(a) for a in args])}"
+            )
         # trigger prompt info update
         self.info_pythonproj_cwd = None
         self.info_git_cwd = None
         self.info_venv_cwd = None
-        cmd_ = self.env.get(cmd)
-        if cmd_ and isinstance(cmd_, Cmd):
-            cmd_.execute(self, args)
-        elif cmd == "exit":
-            return False
-        elif cmd.endswith(".dsh"):
-            self.env.get("script").execute(self, [cmd, *args])
-        else:
-            self.env.get("run").execute(self, [cmd, *args])
+        try:
+            cmd_ = self.env.get(cmd)
+            if cmd_ and isinstance(cmd_, Cmd):
+                cmd_.execute(self, args)
+            elif cmd == "exit":
+                return False
+            elif cmd.endswith(".dsh"):
+                self.env.get("script").execute(self, [cmd, *args])
+            else:
+                self.env.get("run").execute(self, [cmd, *args])
+        except KeyboardInterrupt:
+            pass
         return True
 
 
@@ -784,6 +808,18 @@ class Cmd:
 
 
 class CmdOptions(Cmd):
+    def __init__(self):
+         Cmd.__init__(self, "options")
+
+    def help(self):
+        return "<options>   : list currently active options"
+
+    def execute(self, shell, args):
+        for option, value in shell.options.items():
+            shell.outs.print(f"{option} = {value}")
+
+
+class CmdOption(Cmd):
     def __init__(self):
          Cmd.__init__(self, "option")
 
@@ -821,9 +857,6 @@ class CmdRun(Cmd):
             elif executable.endswith(".dsh"):
                 shell.env.get("script").execute(shell, [executable, *args])
             else:
-                if shell.option_set("echo"):
-                    # TODO properly quote args if necessary
-                    shell.outs.print(f":: {executable} {' '.join(args)}")
                 p = subprocess.run(
                     [
                         executable,
@@ -848,9 +881,9 @@ def evaluate_expression(expr, env, cwd):
     a, b = split_command(expr, env)
     parts = [a, *b]
     if len(parts) == 3:
-        lhs = evaluate_expression(parts[0], env)
+        lhs = evaluate_expression(parts[0], env, cwd)
         op = parts[1]
-        rhs = evaluate_expression(parts[2], env)
+        rhs = evaluate_expression(parts[2], env, cwd)
         if op == "<":
             return int(lhs) < int(rhs)
         elif op == "<=":
@@ -917,15 +950,17 @@ def evaluate_expression(expr, env, cwd):
     raise ValueError(f"cannot evaluate {expr}")
 
 
-class CmdExpr(Cmd):
+class CmdEval(Cmd):
     def __init__(self):
-         Cmd.__init__(self, "expr")
+         Cmd.__init__(self, "eval")
 
     def help(self):
-        return "<arg> <op> <arg>   : Evaluates the expression"
+        return (
+            "(<arg> <op> <arg> | <predicate> <arg>  | <arg>)   "
+            ": Evaluates the expression"
+        )
 
     def execute(self, shell, args):
-        print("EXPR", args)
         return evalute_expression(" ".join(args))
 
 
@@ -958,7 +993,8 @@ class CmdScript(Cmd):
                 try:
                     shell.execute(stmt_lines[0])
                 except CommandFailedException:
-                    break
+                    if shell.option_set("stop-on-error"):
+                        break
             elif stmt == "if":
                 condition = stmt_lines[0][len("if "):].strip()
                 body = stmt_lines[1:]
@@ -1166,7 +1202,7 @@ class CmdSet(Cmd):
 
     def execute(self, shell, args):
         name = args[0]
-        if args[1] == "eval":
+        if args[1] == "exec":
             scriptshell = Dabshell(shell)
             scriptshell.env.set("argc", 0)
             scriptshell.outs = StringOutput()
@@ -1175,7 +1211,7 @@ class CmdSet(Cmd):
             except CommandFailedException:
                 pass
             value = scriptshell.outs.value().strip()
-        elif args[1] == "expr":
+        elif args[1] == "eval":
             value = evaluate_expression(
                 " ".join(args[2:]),
                 shell.env,
@@ -1400,6 +1436,11 @@ class CmdTree(Cmd):
             args = ["."]
         path = args[0]
         filters = args[1:]
+        if not os.path.isabs(path):
+            path = os.path.join(shell.cwd, path)
+        if not os.path.isdir(path):
+            filters = [path, *args]
+            path = "."
         if not os.path.isabs(path):
             path = os.path.join(shell.cwd, path)
         if os.path.isdir(path):
