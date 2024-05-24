@@ -11,7 +11,7 @@ import time
 import tomllib
 
 
-max_line_length = 80
+max_line_length = shutil.get_terminal_size().columns - 1
 
 esc = "\u001b"
 
@@ -637,8 +637,10 @@ class Dabshell:
         return prefix
 
     def run(self):
+        global max_line_length
         self.outp.write(self.prompt() + "\n")
         while True:
+            max_line_length = shutil.get_terminal_size().columns - 1
             key = self.inp.getch()
             if key == KEY_CTRL_C:
                 if self.line == "":
