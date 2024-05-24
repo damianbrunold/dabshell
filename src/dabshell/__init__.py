@@ -425,6 +425,8 @@ class Dabshell:
             self.oute = parent_shell.oute
             self.outs_old = parent_shell.outs_old
             self.oute_old = parent_shell.oute_old
+            self.options = {}
+            self.options.update(parent_shell.options)
         else:
             self.cwd = self.canon(".")
             self.env = Env()
@@ -433,6 +435,10 @@ class Dabshell:
             self.oute = StdError()
             self.outs_old = None
             self.oute_old = None
+            self.options = {
+                "echo": "off",
+                "stop-on-error": "on",
+            }
             for name in os.environ:
                 self.env.set("env:" + name, os.environ.get(name, ""))
             self.init_cmd(CmdRun())
@@ -464,6 +470,7 @@ class Dabshell:
             self.init_cmd(CmdWhich())
             self.init_cmd(CmdTitle())
             self.init_cmd(CmdHelp())
+            self.init_cmd(CmdOption())
             self.init_cmd(CmdOptions())
         self.history = []
         self.history_index = -1
@@ -472,9 +479,6 @@ class Dabshell:
         self.inp = RawInput()
         self.line = ""
         self.index = 0
-        self.options = {
-            "echo": "off",
-        }
         self.info_pythonproj_cwd = None
         self.info_pythonproj_s = ""
         self.info_git_cwd = None
@@ -805,6 +809,18 @@ class Cmd:
 
 class CmdOptions(Cmd):
     def __init__(self):
+         Cmd.__init__(self, "options")
+
+    def help(self):
+        return "<options>   : list currently active options"
+
+    def execute(self, shell, args):
+        for option, value in shell.options.items():
+            shell.outs.print(f"{option} = {value}")
+
+
+class CmdOption(Cmd):
+    def __init__(self):
          Cmd.__init__(self, "option")
 
     def help(self):
@@ -975,7 +991,8 @@ class CmdScript(Cmd):
                 try:
                     shell.execute(stmt_lines[0])
                 except CommandFailedException:
-                    break
+                    if shell.option_set("stop-on-error"):
+                        break
             elif stmt == "if":
                 condition = stmt_lines[0][len("if "):].strip()
                 body = stmt_lines[1:]
