@@ -627,7 +627,13 @@ class Dabshell:
         while True:
             key = self.inp.getch()
             if key == KEY_CTRL_C:
-                break
+                if self.line == "":
+                    break
+                else:
+                    self.outp.write("\n" + self.prompt() + "\n")
+                    self.line = ""
+                    self.index = 0
+                    continue
             elif key == KEY_LF or key == KEY_CR:
                 if re.match("^![0-9]+$", self.line):
                     hidx = int(self.line[1:])
