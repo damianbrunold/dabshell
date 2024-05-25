@@ -344,8 +344,14 @@ def quote_arg(arg):
         arg = arg.replace("\\", "\\\\")
         arg = arg.replace("\"", "\\\"")
         return "\"" + arg + "\""
+    elif arg == "":
+        return "\"\""
     else:
         return arg
+
+
+def quote_args(args):
+    return " ".join([quote_arg(arg) for arg in args])
 
 
 class Env:
@@ -684,6 +690,8 @@ class Dabshell:
                             break
                     except CommandFailedException:
                         pass
+                    except Exception as e:
+                        self.oute.print(str(e))
                     self.outp.write(self.prompt() + "\n")
                     self.line = ""
                     self.index = 0
@@ -939,9 +947,9 @@ def evaluate_expression(expr, env, cwd):
     a, b = split_command(expr, env)
     parts = [a, *b]
     if len(parts) == 3:
-        lhs = evaluate_expression(parts[0], env, cwd)
+        lhs = parts[0]
         op = parts[1]
-        rhs = evaluate_expression(parts[2], env, cwd)
+        rhs = parts[2]
         if op == "<":
             return int(lhs) < int(rhs)
         elif op == "<=":
@@ -950,10 +958,6 @@ def evaluate_expression(expr, env, cwd):
             return int(lhs) > int(rhs)
         elif op == ">=":
             return int(lhs) >= int(rhs)
-        elif op == "==":
-            return str(lhs) == str(rhs)
-        elif op == "!=":
-            return str(lhs) != str(rhs)
         elif op == "+":
             return int(lhs) + int(rhs)
         elif op == "-":
@@ -962,49 +966,111 @@ def evaluate_expression(expr, env, cwd):
             return int(lhs) * int(rhs)
         elif op == "/":
             return int(lhs) // int(rhs)
+        elif op == "%":
+            return int(lhs) % int(rhs)
+        elif op == "**":
+            return int(lhs) ** int(rhs)
+        elif op == "==":
+            return lhs == rhs
+        elif op == "!=":
+            return lhs != rhs
+        elif op == "==|ci":
+            lhs = lhs.lower()
+            rhs = rhs.lower()
+            return lhs == rhs
+        elif op == "!=|ci":
+            lhs = lhs.lower()
+            rhs = rhs.lower()
+            return lhs != rhs
+        elif op == "*=":
+            return lhs.endswith(rhs) or rhs.endswith(lhs)
+        elif op == "=*":
+            return lhs.startswith(rhs) or rhs.startswith(lhs)
+        elif op == "*=|ci":
+            lhs = lhs.lower()
+            rhs = rhs.lower()
+            return lhs.endswith(rhs) or rhs.endswith(lhs)
+        elif op == "=*|ci":
+            lhs = lhs.lower()
+            rhs = rhs.lower()
+            return lhs.startswith(rhs) or rhs.startswith(lhs)
+        else:
+            raise ValueError(f"unknown operator {op}")
     elif len(parts) == 2:
-        predicate = parts[0]
+        pred = parts[0]
         value = parts[1]
-        if predicate == "exists":
+        if pred == "exists":
             if not os.path.isabs(value):
                 value = os.path.join(cwd, value)
             if os.path.exists(value):
                 return "yes"
             else:
                 return ""
-        elif predicate == "isfile":
-            if not os.path.isabs(value):
-                value = os.path.join(cwd, value)
-            if os.path.isfile(value):
-                return "yes"
-            else:
-                return ""
-        elif predicate == "isdir":
-            if not os.path.isabs(value):
-                value = os.path.join(cwd, value)
-            if os.path.isdir(value):
-                return "yes"
-            else:
-                return ""
-        elif predicate == "nexists":
+        elif pred == "not-exists" or pred == "exists-not":
             if not os.path.isabs(value):
                 value = os.path.join(cwd, value)
             if not os.path.exists(value):
                 return "yes"
             else:
                 return ""
+        elif pred == "is-file":
+            if not os.path.isabs(value):
+                value = os.path.join(cwd, value)
+            if os.path.isfile(value):
+                return "yes"
+            else:
+                return ""
+        elif pred == "not-is-file" or pred == "is-not-file":
+            if not os.path.isabs(value):
+                value = os.path.join(cwd, value)
+            if os.path.isfile(value):
+                return ""
+            else:
+                return "yes"
+        elif pred == "is-dir":
+            if not os.path.isabs(value):
+                value = os.path.join(cwd, value)
+            if os.path.isdir(value):
+                return "yes"
+            else:
+                return ""
+        elif pred == "not-is-dir" or "is-not-dir":
+            if not os.path.isabs(value):
+                value = os.path.join(cwd, value)
+            if os.path.isdir(value):
+                return ""
+            else:
+                return "yes"
+        elif pred == "has-extension":
+            base, ext = os.path.splitext()
+            if ext == value:
+                return "yes"
+            else:
+                return ""
+        elif pred == "not-has-extension" or pred == "has-not-extension":
+            base, ext = os.path.splitext()
+            if ext == value:
+                return ""
+            else:
+                return "yes"
+        elif pred == "is-empty":
+            if value == "":
+                return "yes"
+            else:
+                return ""
+        elif pred == "not-is-empty" or pred == "is-not-empty":
+            if value == "":
+                return ""
+            else:
+                return "yes"
+        else:
+            raise ValueError(f"unknown pred {pred}")
     elif len(parts) == 1:
         arg = parts[0]
-        if (
-            'A' <= arg[0] <= 'Z'
-            or 'a' <= arg[0] <= 'z'
-            or arg[0] == '_'
-        ):
-            return env.get(arg)
-        elif arg.startswith("\"") or arg.startswith("'"):
-            return arg[1:-1]
-        else:
+        try:
             return int(arg)
+        except Exception:
+            return arg
     raise ValueError(f"cannot evaluate {expr}")
 
 
@@ -1019,7 +1085,8 @@ class CmdEval(Cmd):
         )
 
     def execute(self, shell, args):
-        return evalute_expression(" ".join(args))
+        result = evaluate_expression(quote_args(args), shell.env, shell.cwd)
+        shell.outs.print(result)
 
 
 class CmdScript(Cmd):
@@ -1265,7 +1332,7 @@ class CmdSet(Cmd):
             scriptshell.env.set("argc", 0)
             scriptshell.outs = StringOutput()
             try:
-                scriptshell.execute(" ".join(args[2:]))
+                scriptshell.execute(quote_args(args[2:]))
             except CommandFailedException:
                 pass
             value = scriptshell.outs.value().strip()
