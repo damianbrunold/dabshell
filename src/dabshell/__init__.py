@@ -38,6 +38,10 @@ KEY_LF = -11
 KEY_CR = -12
 KEY_TAB = -13
 KEY_ESC = -14
+KEY_CTRL_LEFT = -15
+KEY_CTRL_RIGHT = -16
+KEY_CTRL_UP = -17
+KEY_CTRL_DOWN = -18
 
 KEY_CTRL_A = -101
 KEY_CTRL_B = -102
@@ -83,6 +87,10 @@ class RawInput:
                 elif n == 0x4f: return KEY_END
                 elif n == 0x51: return KEY_PAGEDOWN
                 elif n == 0x49: return KEY_PAGEUP
+                # TODO KEY_CTRL_LEFT
+                # TODO KEY_CTRL_RIGHT
+                # TODO KEY_CTRL_UP
+                # TODO KEY_CTRL_DOWN
                 else:
                     print(hex(n))
             elif n == 0x8:
@@ -118,6 +126,19 @@ class RawInput:
                         elif n == 0x42: return KEY_DOWN
                         elif n == 0x48: return KEY_HOME
                         elif n == 0x46: return KEY_END
+                        elif n == 0x31:
+                            sys.stdin.read(1)  # skip ;
+                            n = ord(sys.stdin.read(1))
+                            if n == 0x35:
+                                n = ord(sys.stdin.read(1))
+                                if n == 0x44: return KEY_CTRL_LEFT
+                                elif n == 0x43: return KEY_CTRL_RIGHT
+                                elif n == 0x41: return KEY_CTRL_UP
+                                elif n == 0x42: return KEY_CTRL_DOWN
+                                else:
+                                    print(hex(n))
+                            else:
+                                print(hex(n))
                         elif n == 0x33:
                             sys.stdin.read(1)  # skip 0x7e
                             return KEY_DELETE
@@ -731,6 +752,27 @@ class Dabshell:
                         self.history_index = -1
                         self.history_current = ""
                         self.index = len(self.line)
+            elif key == KEY_CTRL_LEFT:
+                new_idx = self.index - 1
+                while new_idx >= 0 and self.line[new_idx] == ' ':
+                    new_idx -= 1
+                while new_idx >= 0 and self.line[new_idx] != ' ':
+                    new_idx -= 1
+                new_idx += 1
+                if new_idx >= 0:
+                    self.index = new_idx
+                else:
+                    self.index = 0
+            elif key == KEY_CTRL_RIGHT:
+                new_idx = self.index + 1
+                while new_idx < len(self.line) and self.line[new_idx] != ' ':
+                    new_idx += 1
+                while new_idx < len(self.line) and self.line[new_idx] == ' ':
+                    new_idx += 1
+                if new_idx < len(self.line):
+                    self.index = new_idx
+                else:
+                    self.index = len(self.line)
             elif type(key) == str:
                 pre = self.line[:self.index]
                 post = self.line[self.index:]
