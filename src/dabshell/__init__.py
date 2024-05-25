@@ -1158,6 +1158,17 @@ class CmdScript(Cmd):
                         shell.env,
                         shell.cwd,
                     )
+            elif stmt == "def":
+                params = [
+                    name.strip()
+                    for name in stmt_lines[0][len("def "):].split(" ")
+                    if name.strip()
+                ]
+                name = params[0]
+                params = params[1:]
+                body = stmt_lines[1:]
+                proc = CmdProcedure(name, params, body, shell.env)
+                shell.env.set(name, proc)
             stmt, stmt_lines, idx = self.get_statement(lines, idx)
         else:
             return True
@@ -1177,6 +1188,7 @@ class CmdScript(Cmd):
                     line.startswith("if ")
                     or line.startswith("for ")
                     or line.startswith("while ")
+                    or line.startswith("def ")
                 ):
                     stmt_lines.append(line)
                     depth += 1
@@ -1201,6 +1213,7 @@ class CmdScript(Cmd):
                     line.startswith("if ")
                     or line.startswith("for ")
                     or line.startswith("while ")
+                    or line.startswith("def ")
                 ):
                     stmt_lines.append(line)
                     depth += 1
@@ -1225,6 +1238,32 @@ class CmdScript(Cmd):
                     line.startswith("if ")
                     or line.startswith("for ")
                     or line.startswith("while ")
+                    or line.startswith("def ")
+                ):
+                    stmt_lines.append(line)
+                    depth += 1
+                elif line == "end":
+                    if depth == 0:
+                        break
+                    else:
+                        stmt_lines.append(line)
+                        depth -= 1
+                else:
+                    stmt_lines.append(line)
+                idx += 1
+            return stmt, stmt_lines, idx + 1
+        elif line.startswith("def "):
+            stmt = "def"
+            stmt_lines = [line]
+            idx += 1
+            depth = 0
+            while idx < len(lines):
+                line = lines[idx]
+                if (
+                    line.startswith("if ")
+                    or line.startswith("for ")
+                    or line.startswith("while ")
+                    or line.startswith("def ")
                 ):
                     stmt_lines.append(line)
                     depth += 1
@@ -1240,6 +1279,26 @@ class CmdScript(Cmd):
             return stmt, stmt_lines, idx + 1
         else:
             return "single", [line], idx + 1
+
+
+class CmdProcedure(CmdScript):
+    def __init__(self, name, params, body, lexenv):
+         Cmd.__init__(self, name)
+         self.lexenv = lexenv
+         self.params = params
+         self.body = body
+
+    def help(self):
+        return f"{self.name} {' '.join(self.args)}  : custom procedure"
+
+    def execute(self, shell, args):
+        env = Env(self.lexenv)
+        for idx, name in enumerate(self.params):
+            arg = args[idx] if idx < len(args) else ""
+            env.set(name, arg)
+        procshell = Dabshell(shell)
+        procshell.env = env
+        self.execute_lines(procshell, self.body)
 
 
 class CmdSource(CmdScript):
