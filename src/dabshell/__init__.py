@@ -288,18 +288,28 @@ def replace_vars(s, env):
     in_var = False
     result = ""
     var = ""
+    level = 0
     for ch in s:
         if ch == "{" and not in_single_quote:
-            in_var = True
+            if level == 0:
+                in_var = True
+                level += 1
+            else:
+                var += ch
+                level += 1
         elif ch != "}" and in_var:
             var += ch
         elif ch == "}" and in_var:
-            if var.startswith("!"):
-                result += exec(var[1:], env)
+            level -= 1
+            if level == 0:
+                if var.startswith("!"):
+                    result += exec(var[1:], env)
+                else:
+                    result += str(env.get(var, "{" + var + "}"))
+                var = ""
+                in_var = False
             else:
-                result += str(env.get(var, "{" + var + "}"))
-            var = ""
-            in_var = False
+                var += ch
         elif ch == "'":
             in_single_quote = not in_single_quote
             result += ch
@@ -506,6 +516,8 @@ class Dabshell:
             self.init_cmd(CmdTree())
             self.init_cmd(CmdDirname())
             self.init_cmd(CmdBasename())
+            self.init_cmd(CmdRemoveExt())
+            self.init_cmd(CmdGetExt())
             self.init_cmd(CmdRedirect())
             self.init_cmd(CmdHistory())
             self.init_cmd(CmdDate())
@@ -1775,6 +1787,28 @@ class CmdDirname(Cmd):
 
     def execute(self, shell, args):
         shell.outs.print(os.path.dirname(args[0]))
+
+
+class CmdGetExt(Cmd):
+    def __init__(self):
+        Cmd.__init__(self, "get-ext")
+
+    def help(self):
+        return "<filename> : returns the file extension"
+
+    def execute(self, shell, args):
+        shell.outs.print(os.path.splitext(args[0])[1])
+
+
+class CmdRemoveExt(Cmd):
+    def __init__(self):
+        Cmd.__init__(self, "remove-ext")
+
+    def help(self):
+        return "<filename> : returns the filename without extension"
+
+    def execute(self, shell, args):
+        shell.outs.print(os.path.splitext(args[0])[0])
 
 
 class CmdRedirect(Cmd):
