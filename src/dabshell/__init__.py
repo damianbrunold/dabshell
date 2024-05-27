@@ -229,49 +229,6 @@ def find_partial_executable(cwd, word):
     return sorted(results)
 
 
-def split_command_quoted(line):
-    parts = []
-    current_part = ""
-    in_quote = False
-    for idx in range(len(line)):
-        ch = line[idx]
-        if ch == "\"" and not in_quote:
-            if current_part:
-                parts.append(current_part)
-                current_part = "\""
-            in_quote = True
-        elif (
-            ch == "\\"
-            and idx < len(line) - 1
-            and line[idx+1] == "\""
-            and in_quote
-        ):
-            current_part += "\\\""
-            idx += 1
-        elif (
-            ch == "\\"
-            and idx < len(line) - 1
-            and line[idx+1] == "\\"
-            and in_quote
-        ):
-            current_part += "\\\\"
-            idx += 1
-        elif ch =="\"" and in_quote:
-            in_quote = False
-            parts.append(current_part + "\"")
-            current_part = ""
-        elif ch == " " and not in_quote:
-            if current_part:
-                parts.append(current_part)
-                current_part = ""
-        else:
-            current_part += ch
-        idx += 1
-    if current_part:
-        parts.append(current_part)
-    return parts
-
-
 def exec(s, env):
     scriptshell = Dabshell()
     scriptshell.env = Env(env)
@@ -318,8 +275,9 @@ def replace_vars(s, env):
     return result
 
 
-def split_command(line, env):
-    line = replace_vars(line, env)
+def split_command(line, env, with_vars=True):
+    if with_vars:
+        line = replace_vars(line, env)
     parts = []
     current_part = ""
     in_quote = False
@@ -723,12 +681,17 @@ class Dabshell:
                     self.index = 0
             elif key == KEY_TAB:
                 if self.line.strip() and self.index == len(self.line):
-                    parts = split_command_quoted(self.line)
+                    cmd, args = split_command(
+                        self.line,
+                        self.env,
+                        with_vars=False,
+                    )
+                    parts = [cmd, *args]
                     word = parts[-1]
                     completed = self.complete_word(word)
                     if completed:
                         parts[-1] = completed
-                        self.line = " ".join(parts)
+                        self.line = quote_args(parts)
                         self.index = len(self.line)
             elif key == KEY_ESC:
                 self.line = ""
