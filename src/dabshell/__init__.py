@@ -272,6 +272,17 @@ def split_command_quoted(line):
     return parts
 
 
+def exec(s, env):
+    scriptshell = Dabshell()
+    scriptshell.env = Env(env)
+    scriptshell.outs = StringOutput()
+    try:
+        scriptshell.execute(s)
+    except CommandFailedException:
+        pass
+    return scriptshell.outs.value().strip()
+
+
 def replace_vars(s, env):
     in_single_quote = False
     in_var = False
@@ -283,7 +294,10 @@ def replace_vars(s, env):
         elif ch != "}" and in_var:
             var += ch
         elif ch == "}" and in_var:
-            result += str(env.get(var, "{" + var + "}"))
+            if var.startswith("!"):
+                result += exec(var[1:], env)
+            else:
+                result += str(env.get(var, "{" + var + "}"))
             var = ""
             in_var = False
         elif ch == "'":
@@ -1387,17 +1401,10 @@ class CmdSet(Cmd):
     def execute(self, shell, args):
         name = args[0]
         if args[1] == "exec":
-            scriptshell = Dabshell(shell)
-            scriptshell.env.set("argc", 0)
-            scriptshell.outs = StringOutput()
-            try:
-                scriptshell.execute(quote_args(args[2:]))
-            except CommandFailedException:
-                pass
-            value = scriptshell.outs.value().strip()
+            value = exec(quote_args(args[2:]), shell.env)
         elif args[1] == "eval":
             value = evaluate_expression(
-                " ".join(args[2:]),
+                quote_args(args[2:]),
                 shell.env,
                 shell.cwd,
             )
