@@ -484,6 +484,7 @@ class Dabshell:
             self.init_cmd(CmdHelp())
             self.init_cmd(CmdOption())
             self.init_cmd(CmdOptions())
+            self.init_cmd(CmdResetTerm())
         self.history = []
         self.history_index = -1
         self.history_current = ""
@@ -657,6 +658,7 @@ class Dabshell:
                 if self.line == "":
                     break
                 else:
+                    os.system("")
                     self.outp.write("\n" + self.prompt() + "\n")
                     self.line = ""
                     self.index = 0
@@ -676,6 +678,7 @@ class Dabshell:
                         pass
                     except Exception as e:
                         self.oute.print(str(e))
+                    os.system("")
                     self.outp.write(self.prompt() + "\n")
                     self.line = ""
                     self.index = 0
@@ -1988,6 +1991,19 @@ class CmdTitle(Cmd):
     def execute(self, shell, args):
         if IS_WIN:
             os.system("title " + " ".join(args))
+
+
+class CmdResetTerm(Cmd):
+    def __init__(self):
+        Cmd.__init__(self, "reset-term")
+
+    def help(self):
+        return (
+            "Resets the terminal"
+        )
+
+    def execute(self, shell, args):
+        os.system("")
 
 
 class CmdHelp(Cmd):
