@@ -609,6 +609,8 @@ class Dabshell:
         return os.path.normpath(os.path.abspath(path))
 
     def complete_word(self, word):
+        if word.startswith("\"") and word.endswith("\""):
+            word = word[1:-1]
         potentials = []
         for cname in self.env.names():
             if cname.startswith(word):
@@ -810,7 +812,8 @@ class Dabshell:
             return True
         cmd, args = split_command(line, self.env)
         if cmd != "history":
-            self.history.append(line)
+            if not self.history or self.history[-1] != line:
+                self.history.append(line)
             self.history_index = -1
             self.history_current = ""
         if self.option_set("echo"):
@@ -1628,6 +1631,9 @@ class CmdTree(Cmd):
                                 flt.endswith("*") and
                                 fname.startswith(flt[:-1])
                             ):
+                                print(path_)
+                                break
+                            elif flt == fname:
                                 print(path_)
                                 break
                     else:
