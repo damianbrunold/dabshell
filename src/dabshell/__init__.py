@@ -127,7 +127,7 @@ class RawInput:
                         elif n == 0x48: return KEY_HOME
                         elif n == 0x46: return KEY_END
                         elif n == 0x31:
-                            sys.stdin.read(1)  # skip ;
+                            sys.stdin.read(1)  # skip ; 0x3b
                             n = ord(sys.stdin.read(1))
                             if n == 0x35:
                                 n = ord(sys.stdin.read(1))
@@ -2125,10 +2125,51 @@ class CmdHelp(Cmd):
             if obj and isinstance(obj, Cmd):
                 shell.outs.print(f"{obj.name} {obj.help()}")
 
+class RawInputTest:
+    def getch(self):
+        if IS_WIN:
+            ch = msvcrt.getwch()
+            n = ord(ch)
+            print(n, hex(n))
+            return ch
+        else:
+            self.init()
+            n = None
+            ch = None
+            try:
+                ch = sys.stdin.read(1)
+                n = ord(ch)
+            finally:
+                self.restore()
+            print(n, hex(n))
+            return ch
+
+    def init(self):
+        self.old_settings = termios.tcgetattr(sys.stdin)
+        tty.setraw(sys.stdin)
+
+    def restore(self):
+        termios.tcsetattr(
+            sys.stdin,
+            termios.TCSADRAIN,
+            self.old_settings,
+        )
 
 def dabshell():
     Dabshell().run()
 
 
+def input_test():
+    inp = RawInputTest()
+    while True:
+        ch = inp.getch()
+        if ord(ch) == 13:
+            print()
+        if ord(ch) == 3:
+            break
+
 if __name__ == "__main__":
-    dabshell()
+    if len(sys.argv) > 1 and sys.argv[1] == "input-test":
+        input_test()
+    else:
+        dabshell()
