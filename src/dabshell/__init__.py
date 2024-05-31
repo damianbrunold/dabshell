@@ -322,7 +322,7 @@ def split_command(line, env, with_vars=True):
 
 
 def quote_arg(arg):
-    if " " in arg or "\"" in arg or "\'" in arg or "\\" in arg:
+    if " " in arg or "\"" in arg or "\'" in arg:
         arg = arg.replace("\\", "\\\\")
         arg = arg.replace("\"", "\\\"")
         return "\"" + arg + "\""
@@ -629,13 +629,12 @@ class Dabshell:
             # find completions for relative paths
             pathfile = os.path.join(self.cwd, word)
             path = os.path.dirname(pathfile)
+            partial_path = path[len(self.cwd)+1:]
             file = os.path.basename(pathfile)
             if os.path.isdir(path):
                 for fname in os.listdir(path):
                     if fname.startswith(file):
-                        potentials.append(
-                            self.canon(os.path.join(path, fname))
-                        )
+                        potentials.append(os.path.join(partial_path, fname))
         if not potentials:
             # find completions for executables in e.g. venv and PATH
             cmds = find_partial_executable(self.cwd, word)
@@ -681,7 +680,7 @@ class Dabshell:
                         self.index = len(self.line)
                     elif tabbed:
                         self.outp.print()
-                        s = " ".join(potentials)
+                        s = " ".join([os.path.basename(p) for p in potentials])
                         if len(s) > max_line_length - 1:
                             s = s[:max_line_length-4] + "..."
                         self.outp.print(s)
