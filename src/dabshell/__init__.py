@@ -615,16 +615,21 @@ class Dabshell:
             return None
         return os.path.normpath(os.path.abspath(path))
 
-    def complete_word(self, word):
+    def complete_word(self, word, only_dir=False):
         if word.startswith("\"") and word.endswith("\""):
             word = word[1:-1]
         potentials = []
-        for cname in self.env.names():
-            if cname.startswith(word):
-                potentials.append(cname)
+        if not only_dir:
+            for cname in self.env.names():
+                if cname.startswith(word):
+                    potentials.append(cname)
         for fname in os.listdir(self.cwd):
             if fname.startswith(word):
-                potentials.append(fname)
+                if only_dir:
+                    if os.path.isdir(os.path.join(self.cwd, fname)):
+                        potentials.append(fname)
+                else:
+                    potentials.append(fname)
         if not potentials:
             # find completions for relative paths
             pathfile = os.path.join(self.cwd, word)
@@ -634,8 +639,16 @@ class Dabshell:
             if os.path.isdir(path):
                 for fname in os.listdir(path):
                     if fname.startswith(file):
-                        potentials.append(os.path.join(partial_path, fname))
-        if not potentials:
+                        if only_dir:
+                            if os.path.isdir(os.path.join(path, fname)):
+                                potentials.append(
+                                    os.path.join(partial_path, fname)
+                                )
+                        else:
+                            potentials.append(
+                                os.path.join(partial_path, fname)
+                            )
+        if not potentials and not only_dir:
             # find completions for executables in e.g. venv and PATH
             cmds = find_partial_executable(self.cwd, word)
             if cmds:
@@ -673,25 +686,21 @@ class Dabshell:
                     )
                     parts = [cmd, *args]
                     word = parts[-1]
-                    completed, potentials = self.complete_word(word)
+                    only_dir = cmd in ["cd"]
+                    completed, potentials = self.complete_word(
+                        word,
+                        only_dir=only_dir,
+                    )
                     if completed and parts[-1] != completed:
                         parts[-1] = completed
                         self.line = quote_args(parts)
                         self.index = len(self.line)
                     elif tabbed:
                         self.outp.print()
-                        if cmd in ["cd"]:
-                            s = " ".join([
-                                os.path.basename(p)
-                                for p in potentials
-                                if os.path.isdir(p)
-                                or os.path.isdir(os.path.join(self.cwd, p))
-                            ])
-                        else:
-                            s = " ".join([
-                                os.path.basename(p)
-                                for p in potentials
-                            ])
+                        s = " ".join([
+                            os.path.basename(p)
+                            for p in potentials
+                        ])
                         if len(s) > max_line_length - 1:
                             s = s[:max_line_length-4] + "..."
                         self.outp.print(s)
