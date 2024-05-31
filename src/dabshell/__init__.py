@@ -642,9 +642,9 @@ class Dabshell:
             if cmds:
                 potentials += cmds
         if not potentials:
-            return None
+            return None, []
         if len(potentials) == 1:
-            return potentials[0]
+            return potentials[0], []
         # find common prefix
         prefix = word
         prefix_len = len(word)
@@ -655,14 +655,42 @@ class Dabshell:
                 break
             prefix = list(prefixes)[0]
             prefix_len = len(prefix)
-        return prefix
+        return prefix, potentials
 
     def run(self):
         global max_line_length
         self.outp.write(self.prompt() + "\n")
+        tabbed = False
         while True:
             max_line_length = shutil.get_terminal_size().columns - 1
             key = self.inp.getch()
+
+            if key == KEY_TAB:
+                if self.line.strip() and self.index == len(self.line):
+                    cmd, args = split_command(
+                        self.line,
+                        self.env,
+                        with_vars=False,
+                    )
+                    parts = [cmd, *args]
+                    word = parts[-1]
+                    completed, potentials = self.complete_word(word)
+                    if completed and parts[-1] != completed:
+                        parts[-1] = completed
+                        self.line = quote_args(parts)
+                        self.index = len(self.line)
+                    elif tabbed:
+                        self.outp.print()
+                        s = " ".join(potentials)
+                        if len(s) > max_line_length - 1:
+                            s = s[:max_line_length-4] + "..."
+                        self.outp.print(s)
+                        tabbed = False
+                    else:
+                        tabbed = True
+            else:
+                tabbed = False
+
             if key == KEY_CTRL_C:
                 if self.line == "":
                     break
@@ -691,20 +719,6 @@ class Dabshell:
                     self.outp.write(self.prompt() + "\n")
                     self.line = ""
                     self.index = 0
-            elif key == KEY_TAB:
-                if self.line.strip() and self.index == len(self.line):
-                    cmd, args = split_command(
-                        self.line,
-                        self.env,
-                        with_vars=False,
-                    )
-                    parts = [cmd, *args]
-                    word = parts[-1]
-                    completed = self.complete_word(word)
-                    if completed:
-                        parts[-1] = completed
-                        self.line = quote_args(parts)
-                        self.index = len(self.line)
             elif key == KEY_ESC:
                 self.line = ""
                 self.index = 0
