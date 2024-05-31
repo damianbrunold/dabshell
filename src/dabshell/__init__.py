@@ -358,6 +358,12 @@ class Env:
     def set(self, name, value):
         self.mappings[name] = value
 
+    def remove(self, name):
+        if name in self.mappings:
+            del self.mappings[name]
+        elif self.parent:
+            self.parent.remove(name)
+
     def update(self, name, value):
         if self.get(name):
             if name in self.mappings:
@@ -455,6 +461,7 @@ class Dabshell:
             self.init_cmd(CmdEval())
             self.init_cmd(CmdScript())
             self.init_cmd(CmdSource())
+            self.init_cmd(CmdAlias())
             self.init_cmd(CmdCd())
             self.init_cmd(CmdLs())
             self.init_cmd(CmdPwd())
@@ -826,6 +833,12 @@ class Dabshell:
         self.info_venv_cwd = None
         try:
             cmd_ = self.env.get(cmd)
+            if isinstance(cmd_, CmdAliasDefinition):
+                cmd, args = split_command(
+                    cmd_.value + " " + quote_args(args),
+                    self.env,
+                )
+                cmd_ = self.env.get(cmd)
             if cmd_ and isinstance(cmd_, Cmd):
                 cmd_.execute(self, args)
             elif cmd == "exit":
@@ -853,6 +866,49 @@ class Cmd:
 
     def __str__(self):
         return self.name
+
+
+class CmdAliasDefinition(Cmd):
+    def __init__(self, name, value):
+        Cmd.__init__(self, name)
+        self.value = value
+
+    def __repr__(self):
+        return f"{self.name}={self.value}"
+
+    def __str__(self):
+        return self.name
+
+
+class CmdAlias(Cmd):
+    def __init__(self):
+         Cmd.__init__(self, "alias")
+
+    def help(self):
+        return "[<name> [<value> | -]]   : set, list or remove alias"
+
+    def execute(self, shell, args):
+        if not args:
+            for name in shell.env.names():
+                alias = shell.env.get(name)
+                if isinstance(alias, CmdAliasDefinition):
+                    shell.outs.print(f"{alias.name} = {alias.value}")
+        else:
+            name = args[0]
+            value = quote_args(args[1:]) if len(args) > 1 else None
+            if value == "-":
+                alias = shell.env.get(name)
+                if isinstance(alias, CmdAliasDefinition):
+                    shell.env.remove(name)
+            elif value is None:
+                alias = shell.env.get(name)
+                if isinstance(alias, CmdAliasDefinition):
+                    shell.outs.print(f"{alias.name} = {alias.value}")
+            elif name in shell.env.names():
+                shell.oute.print(f"{name} already used")
+            else:
+                alias = CmdAliasDefinition(name, value)
+                shell.env.set(name, alias)
 
 
 class CmdOptions(Cmd):
