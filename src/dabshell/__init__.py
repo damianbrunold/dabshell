@@ -87,12 +87,10 @@ class RawInput:
                 elif n == 0x4f: return KEY_END
                 elif n == 0x51: return KEY_PAGEDOWN
                 elif n == 0x49: return KEY_PAGEUP
-                # TODO KEY_CTRL_LEFT
-                # TODO KEY_CTRL_RIGHT
-                # TODO KEY_CTRL_UP
-                # TODO KEY_CTRL_DOWN
-                else:
-                    print(hex(n))
+                elif n == 0x73: return KEY_CTRL_LEFT
+                elif n == 0x74: return KEY_CTRL_RIGHT
+                elif n == 0x8d: return KEY_CTRL_UP
+                elif n == 0x91: return KEY_CTRL_DOWN
             elif n == 0x8:
                 return KEY_BACKSPACE
             elif n == 0x9:
@@ -135,10 +133,6 @@ class RawInput:
                                 elif n == 0x43: return KEY_CTRL_RIGHT
                                 elif n == 0x41: return KEY_CTRL_UP
                                 elif n == 0x42: return KEY_CTRL_DOWN
-                                else:
-                                    print(hex(n))
-                            else:
-                                print(hex(n))
                         elif n == 0x33:
                             sys.stdin.read(1)  # skip 0x7e
                             return KEY_DELETE
@@ -148,8 +142,6 @@ class RawInput:
                         elif n == 0x36:
                             sys.stdin.read(1)  # skip 0x7e
                             return KEY_PAGEDOWN
-                        else:
-                            print(hex(n))
                 elif n == 0x7f:
                     return KEY_BACKSPACE
                 elif n == 0x9:
