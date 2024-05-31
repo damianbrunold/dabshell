@@ -680,7 +680,18 @@ class Dabshell:
                         self.index = len(self.line)
                     elif tabbed:
                         self.outp.print()
-                        s = " ".join([os.path.basename(p) for p in potentials])
+                        if cmd in ["cd"]:
+                            s = " ".join([
+                                os.path.basename(p)
+                                for p in potentials
+                                if os.path.isdir(p)
+                                or os.path.isdir(os.path.join(self.cwd, p))
+                            ])
+                        else:
+                            s = " ".join([
+                                os.path.basename(p)
+                                for p in potentials
+                            ])
                         if len(s) > max_line_length - 1:
                             s = s[:max_line_length-4] + "..."
                         self.outp.print(s)
