@@ -297,10 +297,12 @@ def split_command(line, env, with_vars=True):
         ):
             current_part += "\\"
             idx += 1
-        elif ch =="\"" and in_quote:
+        elif ch == "\"" and in_quote:
             in_quote = False
             parts.append(current_part)
             current_part = ""
+        elif ch == "~" and not in_quote:
+            current_part += os.path.expanduser("~")
         elif ch == " " and not in_quote:
             if current_part:
                 parts.append(current_part)
