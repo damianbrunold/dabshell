@@ -500,7 +500,7 @@ class Dabshell:
         if init_shell:
             cfg = os.path.expanduser("~/.dabshell")
             if os.path.isfile(cfg):
-                self.execute(f"source \"{cfg}\"")
+                self.execute(f"source \"{cfg}\"", history=False)
 
     def init_cmd(self, cmd):
         self.env.set(cmd.name, cmd)
@@ -850,12 +850,12 @@ class Dabshell:
                     self.outp.out.write(f"{esc}[{index}C")
             self.outp.out.flush()
 
-    def execute(self, line):
+    def execute(self, line, history=True):
         line = line.strip()
         if not line:
             return True
         cmd, args = split_command(line, self.env)
-        if cmd != "history":
+        if history and cmd != "history":
             if not self.history or self.history[-1] != line:
                 self.history.append(line)
             self.history_index = -1
@@ -1204,7 +1204,7 @@ class CmdScript(Cmd):
         while stmt:
             if stmt == "single":
                 try:
-                    shell.execute(stmt_lines[0])
+                    shell.execute(stmt_lines[0], history=False)
                 except CommandFailedException:
                     if shell.option_set("stop-on-error"):
                         break
