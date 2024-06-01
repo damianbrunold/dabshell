@@ -628,22 +628,30 @@ class Dabshell:
                     potentials.append(fname)
         if not potentials:
             # find completions for relative paths
-            pathfile = os.path.join(self.cwd, word)
-            path = os.path.dirname(pathfile)
-            partial_path = path[len(self.cwd)+1:]
+            if os.path.isabs(word):
+                pathfile = word
+                path = os.path.dirname(pathfile)
+                partial_path = path
+            else:
+                pathfile = os.path.join(self.cwd, word)
+                path = os.path.dirname(pathfile)
+                partial_path = path[len(self.cwd)+1:]
             file = os.path.basename(pathfile)
-            if os.path.isdir(path):
-                for fname in os.listdir(path):
-                    if fname.startswith(file):
-                        if only_dir:
-                            if os.path.isdir(os.path.join(path, fname)):
+            try:
+                if os.path.isdir(path):
+                    for fname in os.listdir(path):
+                        if fname.startswith(file):
+                            if only_dir:
+                                if os.path.isdir(os.path.join(path, fname)):
+                                    potentials.append(
+                                        os.path.join(partial_path, fname)
+                                    )
+                            else:
                                 potentials.append(
                                     os.path.join(partial_path, fname)
                                 )
-                        else:
-                            potentials.append(
-                                os.path.join(partial_path, fname)
-                            )
+            except Exception:
+                pass  # ignore errors
         if not potentials and not only_dir:
             # find completions for executables in e.g. venv and PATH
             cmds = find_partial_executable(self.cwd, word)
