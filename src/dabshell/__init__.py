@@ -267,9 +267,9 @@ def replace_vars(s, env):
     return result
 
 
-def split_command(line, env, with_vars=True):
+def split_command(line, shell, with_vars=True):
     if with_vars:
-        line = replace_vars(line, env)
+        line = replace_vars(line, shell.env)
     parts = []
     current_part = ""
     in_quote = False
@@ -302,7 +302,10 @@ def split_command(line, env, with_vars=True):
             parts.append(current_part)
             current_part = ""
         elif ch == "~" and not in_quote:
-            current_part += os.path.expanduser("~")
+            if "user-home" in shell.options:
+                current_part += shell.options.get("user-home")
+            else:
+                current_part += os.path.expanduser("~")
         elif ch == " " and not in_quote:
             if current_part:
                 parts.append(current_part)
@@ -687,7 +690,7 @@ class Dabshell:
                 if self.line.strip() and self.index == len(self.line):
                     cmd, args = split_command(
                         self.line,
-                        self.env,
+                        self,
                         with_vars=False,
                     )
                     parts = [cmd, *args]
@@ -856,7 +859,7 @@ class Dabshell:
         line = line.strip()
         if not line:
             return True
-        cmd, args = split_command(line, self.env)
+        cmd, args = split_command(line, self)
         if history and cmd != "history":
             if not self.history or self.history[-1] != line:
                 self.history.append(line)
@@ -875,7 +878,7 @@ class Dabshell:
             if isinstance(cmd_, CmdAliasDefinition):
                 cmd, args = split_command(
                     cmd_.value + " " + quote_args(args),
-                    self.env,
+                    self,
                 )
                 cmd_ = self.env.get(cmd)
             if cmd_ and isinstance(cmd_, Cmd):
@@ -973,10 +976,11 @@ class CmdOption(Cmd):
         option = args[0]
         if len(args) > 1:
             value = args[1]
-            if value in ["on", "1", "yes", "y", "true"]:
-                value = "on"
-            else:
-                value = "off"
+            if option in ["echo", "stop-on-error"]:
+                if value in ["on", "1", "yes", "y", "true"]:
+                    value = "on"
+                else:
+                    value = "off"
             shell.options[option] = value
         else:
             shell.outs.print(shell.options.get(option, ""))
@@ -1032,9 +1036,9 @@ class CmdRun(Cmd):
             shell.oute.print(e)
 
 
-def evaluate_expression(expr, env, cwd):
+def evaluate_expression(expr, shell):
     # TODO this is rather kludgy, need to implement proper interpreter
-    a, b = split_command(expr, env)
+    a, b = split_command(expr, shell)
     parts = [a, *b]
     if len(parts) == 3:
         lhs = parts[0]
@@ -1091,42 +1095,42 @@ def evaluate_expression(expr, env, cwd):
         value = parts[1]
         if pred == "exists":
             if not os.path.isabs(value):
-                value = os.path.join(cwd, value)
+                value = os.path.join(shell.cwd, value)
             if os.path.exists(value):
                 return "yes"
             else:
                 return ""
         elif pred == "not-exists" or pred == "exists-not":
             if not os.path.isabs(value):
-                value = os.path.join(cwd, value)
+                value = os.path.join(shell.cwd, value)
             if not os.path.exists(value):
                 return "yes"
             else:
                 return ""
         elif pred == "is-file":
             if not os.path.isabs(value):
-                value = os.path.join(cwd, value)
+                value = os.path.join(shell.cwd, value)
             if os.path.isfile(value):
                 return "yes"
             else:
                 return ""
         elif pred == "not-is-file" or pred == "is-not-file":
             if not os.path.isabs(value):
-                value = os.path.join(cwd, value)
+                value = os.path.join(shell.cwd, value)
             if os.path.isfile(value):
                 return ""
             else:
                 return "yes"
         elif pred == "is-dir":
             if not os.path.isabs(value):
-                value = os.path.join(cwd, value)
+                value = os.path.join(shell.cwd, value)
             if os.path.isdir(value):
                 return "yes"
             else:
                 return ""
         elif pred == "not-is-dir" or "is-not-dir":
             if not os.path.isabs(value):
-                value = os.path.join(cwd, value)
+                value = os.path.join(shell.cwd, value)
             if os.path.isdir(value):
                 return ""
             else:
@@ -1175,7 +1179,7 @@ class CmdEval(Cmd):
         )
 
     def execute(self, shell, args):
-        result = evaluate_expression(quote_args(args), shell.env, shell.cwd)
+        result = evaluate_expression(quote_args(args), env)
         shell.outs.print(result)
 
 
@@ -1213,7 +1217,7 @@ class CmdScript(Cmd):
             elif stmt == "if":
                 condition = stmt_lines[0][len("if "):].strip()
                 body = stmt_lines[1:]
-                value = evaluate_expression(condition, shell.env, shell.cwd)
+                value = evaluate_expression(condition, shell)
                 if value:
                     if not self.execute_lines(shell, body):
                         break
@@ -1239,15 +1243,11 @@ class CmdScript(Cmd):
             elif stmt == "while":
                 condition = stmt_lines[0][len("while "):]
                 body = stmt_lines[1:]
-                value = evaluate_expression(condition, shell.env, shell.cwd)
+                value = evaluate_expression(condition, shell)
                 while value:
                     if not self.execute_lines(shell, body):
                         break
-                    value = evaluate_expression(
-                        condition,
-                        shell.env,
-                        shell.cwd,
-                    )
+                    value = evaluate_expression(condition, shell)
             elif stmt == "def":
                 params = [
                     name.strip()
@@ -1479,11 +1479,7 @@ class CmdSet(Cmd):
         if args[1] == "exec":
             value = exec(quote_args(args[2:]), shell.env)
         elif args[1] == "eval":
-            value = evaluate_expression(
-                quote_args(args[2:]),
-                shell.env,
-                shell.cwd,
-            )
+            value = evaluate_expression(quote_args(args[2:]), shell)
         else:
             value = " ".join(args[1:])
         shell.env.set(name, value)
