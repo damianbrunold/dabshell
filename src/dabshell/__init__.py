@@ -424,7 +424,7 @@ class CommandFailedException(Exception):
 
 
 class Dabshell:
-    def __init__(self, parent_shell=None):
+    def __init__(self, parent_shell=None, init_shell=False):
         if parent_shell:
             self.cwd = parent_shell.cwd
             self.env = Env(parent_shell.env)
@@ -497,6 +497,10 @@ class Dabshell:
         self.info_git_s = ""
         self.info_venv_cwd = None
         self.info_venv_s = ""
+        if init_shell:
+            cfg = os.path.expanduser("~/.dabshell")
+            if os.path.isfile(cfg):
+                self.execute(f"source \"{cfg}\"")
 
     def init_cmd(self, cmd):
         self.env.set(cmd.name, cmd)
@@ -2148,7 +2152,7 @@ class RawInputTest:
         )
 
 def dabshell():
-    Dabshell().run()
+    Dabshell(init_shell=True).run()
 
 
 def input_test():
