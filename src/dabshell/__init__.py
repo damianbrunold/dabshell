@@ -1199,6 +1199,7 @@ class CmdScript(Cmd):
         scriptshell.env.set("argc", len(args))
         for idx, arg in enumerate(args):
             scriptshell.env.set(f"arg{idx}", arg)
+        scriptshell.env.set("args", quote_args(args))
         with open(scriptfile, encoding="utf8") as infile:
             self.execute_lines(scriptshell, infile.readlines())
         CmdRedirect().execute(shell, ["off"])
@@ -1621,7 +1622,7 @@ class CmdEcho(Cmd):
         return "<value> : prints the value"
 
     def execute(self, shell, args):
-        shell.outs.print(" ".join(args))
+        shell.outs.print(quote_args(args))
 
 
 class CmdCp(Cmd):
