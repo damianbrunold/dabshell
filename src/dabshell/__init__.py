@@ -468,6 +468,7 @@ class Dabshell:
             self.init_cmd(CmdHead())
             self.init_cmd(CmdTail())
             self.init_cmd(CmdEcho())
+            self.init_cmd(CmdPrint())
             self.init_cmd(CmdGrep())
             self.init_cmd(CmdCp())
             self.init_cmd(CmdMv())
@@ -1710,10 +1711,21 @@ class CmdEcho(Cmd):
         Cmd.__init__(self, "echo")
 
     def help(self):
-        return "<value> : prints the value"
+        return "<value> : echoes the value"
 
     def execute(self, shell, args):
         shell.outs.print(quote_args(args))
+
+
+class CmdPrint(Cmd):
+    def __init__(self):
+        Cmd.__init__(self, "print")
+
+    def help(self):
+        return "<value> : prints the value"
+
+    def execute(self, shell, args):
+        shell.outs.print(" ".join(args))
 
 
 class CmdCp(Cmd):
