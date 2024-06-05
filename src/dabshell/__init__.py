@@ -482,6 +482,7 @@ class Dabshell:
             self.init_cmd(CmdGetExt())
             self.init_cmd(CmdRedirect())
             self.init_cmd(CmdHistory())
+            self.init_cmd(CmdLHistory())
             self.init_cmd(CmdDate())
             self.init_cmd(CmdWhich())
             self.init_cmd(CmdTitle())
@@ -492,6 +493,7 @@ class Dabshell:
         self.history = []
         self.history_index = -1
         self.history_current = ""
+        self.local_history = {}
         os.system("")
         self.inp = RawInput()
         self.line = ""
@@ -860,9 +862,12 @@ class Dabshell:
         if not line:
             return True
         cmd, args = split_command(line, self)
-        if history and cmd != "history":
+        if history and cmd != "history" and cmd != "lhistory":
             if not self.history or self.history[-1] != line:
                 self.history.append(line)
+                if self.cwd not in self.local_history:
+                    self.local_history[self.cwd] = []
+                self.local_history[self.cwd].append(line)
             self.history_index = -1
             self.history_current = ""
         if self.option_set("echo"):
@@ -1993,6 +1998,29 @@ class CmdHistory(Cmd):
         else:
             query = args[0].lower()
             for index, line in enumerate(shell.history):
+                if line.lower().find(query) != -1:
+                    shell.outs.print(f"{index} {line}")
+
+
+class CmdLHistory(Cmd):
+    def __init__(self):
+        Cmd.__init__(self, "lhistory")
+
+    def help(self):
+        return (
+            "[<filter>]   : shows the history of commands, "
+            "optionally filtered, only for the current directory"
+        )
+
+    def execute(self, shell, args):
+        if shell.cwd not in shell.local_history:
+            return
+        if not args:
+            for index, line in enumerate(shell.local_history[shell.cwd]):
+                shell.outs.print(f"{index} {line}")
+        else:
+            query = args[0].lower()
+            for index, line in enumerate(shell.local_history[shell.cwd]):
                 if line.lower().find(query) != -1:
                     shell.outs.print(f"{index} {line}")
 
