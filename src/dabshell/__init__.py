@@ -866,6 +866,7 @@ class Dabshell:
         fname = os.path.expanduser("~/.dabshell-history")
         if os.path.isfile(fname):
             with open(fname, encoding="utf8") as infile:
+                idx = 0
                 while True:
                     path = infile.readline()
                     if not path:
@@ -878,7 +879,8 @@ class Dabshell:
                     self.history.append(command)
                     if path not in self.local_history:
                         self.local_history[path] = []
-                    self.local_history[path].append(command)
+                    self.local_history[path].append((idx, command))
+                    idx += 1
 
     def append_history(self, path, command):
         fname = os.path.expanduser("~/.dabshell-history")
@@ -2049,11 +2051,11 @@ class CmdLHistory(Cmd):
         if shell.cwd not in shell.local_history:
             return
         if not args:
-            for index, line in enumerate(shell.local_history[shell.cwd]):
+            for index, line in shell.local_history[shell.cwd]:
                 shell.outs.print(f"{index} {line}")
         else:
             query = args[0].lower()
-            for index, line in enumerate(shell.local_history[shell.cwd]):
+            for index, line in shell.local_history[shell.cwd]:
                 if line.lower().find(query) != -1:
                     shell.outs.print(f"{index} {line}")
 
