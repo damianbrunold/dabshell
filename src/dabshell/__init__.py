@@ -508,6 +508,7 @@ class Dabshell:
             cfg = os.path.expanduser("~/.dabshell")
             if os.path.isfile(cfg):
                 self.execute(f"source \"{cfg}\"", history=False)
+        self.load_history()
 
     def init_cmd(self, cmd):
         self.env.set(cmd.name, cmd)
@@ -857,6 +858,37 @@ class Dabshell:
                     self.outp.out.write(f"{esc}[{index}C")
             self.outp.out.flush()
 
+    def load_history(self):
+        self.history = []
+        self.history_index = 0
+        self.history_current = ""
+        self.local_history = {}
+        fname = os.path.expanduser("~/.dabshell-history")
+        if os.path.isfile(fname):
+            with open(fname, encoding="utf8") as infile:
+                while True:
+                    path = infile.readline()
+                    if not path:
+                        break
+                    command = infile.readline()
+                    if not command:
+                        break
+                    path = path.strip()
+                    command = command.strip()
+                    self.history.append(command)
+                    if path not in self.local_history:
+                        self.local_history[path] = []
+                    self.local_history[path].append(command)
+
+    def append_history(self, path, command):
+        fname = os.path.expanduser("~/.dabshell-history")
+        with open(fname, "a+", encoding="utf8") as outfile:
+            print(path, file=outfile)
+            print(command, file=outfile)
+
+    def write_history(self):
+        pass  # TODO write complete history anew, possibly truncating it
+
     def execute(self, line, history=True):
         line = line.strip()
         if not line:
@@ -868,6 +900,7 @@ class Dabshell:
                 if self.cwd not in self.local_history:
                     self.local_history[self.cwd] = []
                 self.local_history[self.cwd].append(line)
+                self.append_history(self.cwd, line)
             self.history_index = -1
             self.history_current = ""
         if self.option_set("echo"):
