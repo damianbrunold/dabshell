@@ -431,6 +431,7 @@ class CommandFailedException(Exception):
 class Dabshell:
     def __init__(self, parent_shell=None, init_shell=False):
         if parent_shell:
+            self.title = parent_shell.title
             self.cwd = parent_shell.cwd
             self.env = Env(parent_shell.env)
             self.outp = parent_shell.outp
@@ -442,6 +443,8 @@ class Dabshell:
             self.options.update(parent_shell.options)
         else:
             self.cwd = self.canon(".")
+            self.title = "dabshell"
+            os.system("title " + self.title)
             self.env = Env()
             self.outp = StdOutput()
             self.outs = StdOutput()
@@ -931,6 +934,8 @@ class Dabshell:
                 self.env.get("script").execute(self, [cmd, *args])
             else:
                 self.env.get("run").execute(self, [cmd, *args])
+                if IS_WIN and history:
+                    os.system("title " + self.title)
         except KeyboardInterrupt:
             pass
         return True
@@ -2214,7 +2219,8 @@ class CmdTitle(Cmd):
 
     def execute(self, shell, args):
         if IS_WIN:
-            os.system("title " + " ".join(args))
+            shell.title = " ".join(args)
+            os.system("title " + shell.title)
 
 
 class CmdResetTerm(Cmd):
