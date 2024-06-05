@@ -1512,9 +1512,23 @@ class CmdCat(Cmd):
             if not os.path.isabs(filename):
                 filename = os.path.normpath(os.path.join(shell.cwd, filename))
             if os.path.exists(filename):
-                with open(filename, encoding="utf_8") as infile:
+                with open(
+                    filename,
+                    "rb"
+                ) as infile:
+                    encoding = "utf8"
                     for line in infile:
-                        shell.outs.write(line)
+                        try:
+                            shell.outs.write(line.decode(encoding))
+                        except Exception:
+                            if encoding == "utf8":
+                                encoding = "Latin1"
+                            else:
+                                encoding = "utf8"
+                            try:
+                                shell.outs.write(line.decode(encoding))
+                            except Exception:
+                                pass
 
 
 class CmdTail(Cmd):
@@ -1553,17 +1567,42 @@ class CmdTail(Cmd):
             if not os.path.isabs(filename):
                 filename = shell.canon(os.path.join(shell.cwd, filename))
             if os.path.exists(filename):
-                with open(filename, encoding="utf_8") as infile:
+                with open(filename, "rb") as infile:
                     # TODO for now, we read everything, later, optimize
                     lines = infile.readlines()
+                    encoding = "utf8"
                     for line in lines[-n:]:
-                        shell.outs.write(line)
+                        try:
+                            shell.outs.write(line.decode(encoding))
+                        except Exception:
+                            if encoding == "utf8":
+                                encoding = "Latin1"
+                            else:
+                                encoding = "utf8"
+                            try:
+                                shell.outs.write(line.decode(encoding))
+                            except Exception:
+                                pass
                     if "-f" in args or "--follow" in args:
                         while True:
                             try:
                                 line = infile.readline()
                                 if line:
-                                    shell.outs.write(line)
+                                    try:
+                                        shell.outs.write(
+                                            line.decode(encoding)
+                                        )
+                                    except Exception:
+                                        if encoding == "utf8":
+                                            encoding = "Latin1"
+                                        else:
+                                            encoding = "utf8"
+                                        try:
+                                            shell.outs.write(
+                                                line.decode(encoding)
+                                            )
+                                        except Exception:
+                                            pass
                                 else:
                                     time.sleep(1)
                             except KeyboardInterrupt:
@@ -1606,12 +1645,23 @@ class CmdHead(Cmd):
             if not os.path.isabs(filename):
                 filename = shell.canon(os.path.join(shell.cwd, filename))
             if os.path.exists(filename):
-                with open(filename, encoding="utf_8") as infile:
+                with open(filename, "rb") as infile:
+                    encoding = "utf8"
                     for i in range(n):
                         line = infile.readline()
                         if not line:
                             break
-                        shell.outs.write(line)
+                        try:
+                            shell.outs.write(line.decode(encoding))
+                        except Exception:
+                            if encoding == "utf8":
+                                encoding = "Latin1"
+                            else:
+                                encoding = "utf8"
+                            try:
+                                shell.outs.write(line.decode(encoding))
+                            except Exception:
+                                pass
 
 
 class CmdEcho(Cmd):
