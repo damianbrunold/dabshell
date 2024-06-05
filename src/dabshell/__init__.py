@@ -901,7 +901,8 @@ class Dabshell:
                 self.history.append(line)
                 if self.cwd not in self.local_history:
                     self.local_history[self.cwd] = []
-                self.local_history[self.cwd].append(line)
+                idx = len(self.history)
+                self.local_history[self.cwd].append((idx, line))
                 self.append_history(self.cwd, line)
             self.history_index = -1
             self.history_current = ""
