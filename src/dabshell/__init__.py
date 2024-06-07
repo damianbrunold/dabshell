@@ -444,7 +444,8 @@ class Dabshell:
         else:
             self.cwd = self.canon(".")
             self.title = "dabshell"
-            os.system("title " + self.title)
+            if IS_WIN:
+                os.system("title " + self.title)
             self.env = Env()
             self.outp = StdOutput()
             self.outs = StdOutput()
