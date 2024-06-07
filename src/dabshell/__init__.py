@@ -1009,7 +1009,7 @@ class CmdOptions(Cmd):
 
     def execute(self, shell, args):
         for option, value in shell.options.items():
-            shell.outs.print(f"{option} = {value}")
+            shell.outs.print(f"{option} {value}")
 
 
 class CmdOption(Cmd):
@@ -1084,7 +1084,6 @@ class CmdRun(Cmd):
 
 
 def evaluate_expression(expr, shell):
-    # TODO this is rather kludgy, need to implement proper interpreter
     a, b = split_command(expr, shell)
     parts = [a, *b]
     if len(parts) == 3:
@@ -1463,23 +1462,31 @@ class CmdLs(Cmd):
 
     def execute(self, shell, args):
         if len(args) == 0:
-            path = shell.canon(shell.cwd)
-        else:
-            if os.path.isabs(args[0]):
-                path = shell.canon(args[0])
+            self.ls(shell, shell.canon(shell.cwd))
+            return
+        for path in args:
+            if os.path.isabs(path):
+                path = shell.canon(path)
             else:
-                path = shell.canon(os.path.join(shell.cwd, args[0]))
-        if os.path.exists(path):
-            if isinstance(shell.outs, StdOutput):
-                for fname in sorted(os.listdir(path)):
-                    fpath = os.path.join(path, fname)
-                    if os.path.isdir(fpath):
-                        shell.outs.print(f"{esc}[34m{fname}{esc}[0m")
-                    else:
-                        shell.outs.print(fname)
-            else:
-                for fname in sorted(os.listdir(path)):
+                path = shell.canon(os.path.join(shell.cwd, path))
+            self.ls(shell, path)
+
+    def ls(self, shell, path):
+        if not os.path.isdir(path):
+            shell.oute.print(f"ERR: {path} is not a directory")
+            return
+        if isinstance(shell.outs, StdOutput):
+            # support colors when printing to standard output
+            for fname in sorted(os.listdir(path)):
+                fpath = os.path.join(path, fname)
+                if os.path.isdir(fpath):
+                    shell.outs.print(f"{esc}[34m{fname}{esc}[0m")
+                else:
                     shell.outs.print(fname)
+        else:
+            # if output redirected, no colors
+            for fname in sorted(os.listdir(path)):
+                shell.outs.print(fname)
 
 
 class CmdCd(Cmd):
@@ -1555,27 +1562,37 @@ class CmdCat(Cmd):
         return "[<file> ...]   : prints the contents of the files"
 
     def execute(self, shell, args):
+        files = []
         for filename in args:
             if not os.path.isabs(filename):
                 filename = os.path.normpath(os.path.join(shell.cwd, filename))
-            if os.path.exists(filename):
-                with open(
-                    filename,
-                    "rb"
-                ) as infile:
-                    encoding = "utf8"
-                    for line in infile:
+            allfiles = glob.glob(filename)
+            if allfiles:
+                for file in allfiles:
+                    files.append(file)
+            else:
+                files.append(filename)
+        for filename in files:
+            if not os.path.exists(filename):
+                shell.oute.print(f"ERR: {filename} not found")
+                continue
+            with open(
+                filename,
+                "rb"
+            ) as infile:
+                encoding = "utf8"
+                for line in infile:
+                    try:
+                        shell.outs.write(line.decode(encoding))
+                    except Exception:
+                        if encoding == "utf8":
+                            encoding = "Latin1"
+                        else:
+                            encoding = "utf8"
                         try:
                             shell.outs.write(line.decode(encoding))
                         except Exception:
-                            if encoding == "utf8":
-                                encoding = "Latin1"
-                            else:
-                                encoding = "utf8"
-                            try:
-                                shell.outs.write(line.decode(encoding))
-                            except Exception:
-                                pass
+                            pass
 
 
 class CmdTail(Cmd):
@@ -1610,50 +1627,60 @@ class CmdTail(Cmd):
                 filenames.append(arg)
             idx += 1
 
+        files = []
         for filename in filenames:
             if not os.path.isabs(filename):
                 filename = shell.canon(os.path.join(shell.cwd, filename))
-            if os.path.exists(filename):
-                with open(filename, "rb") as infile:
-                    # TODO for now, we read everything, later, optimize
-                    lines = infile.readlines()
-                    encoding = "utf8"
-                    for line in lines[-n:]:
+            allfiles = glob.glob(filename)
+            if allfiles:
+                for file in allfiles:
+                    files.append(file)
+            else:
+                files.append(filename)
+        for filename in files:
+            if not os.path.exists(filename):
+                shell.oute.print(f"ERR: {filename} not found")
+                continue
+            with open(filename, "rb") as infile:
+                # TODO for now, we read everything, later, optimize
+                lines = infile.readlines()
+                encoding = "utf8"
+                for line in lines[-n:]:
+                    try:
+                        shell.outs.write(line.decode(encoding))
+                    except Exception:
+                        if encoding == "utf8":
+                            encoding = "Latin1"
+                        else:
+                            encoding = "utf8"
                         try:
                             shell.outs.write(line.decode(encoding))
                         except Exception:
-                            if encoding == "utf8":
-                                encoding = "Latin1"
-                            else:
-                                encoding = "utf8"
-                            try:
-                                shell.outs.write(line.decode(encoding))
-                            except Exception:
-                                pass
-                    if "-f" in args or "--follow" in args:
-                        while True:
-                            try:
-                                line = infile.readline()
-                                if line:
+                            pass
+                if "-f" in args or "--follow" in args:
+                    while True:
+                        try:
+                            line = infile.readline()
+                            if line:
+                                try:
+                                    shell.outs.write(
+                                        line.decode(encoding)
+                                    )
+                                except Exception:
+                                    if encoding == "utf8":
+                                        encoding = "Latin1"
+                                    else:
+                                        encoding = "utf8"
                                     try:
                                         shell.outs.write(
                                             line.decode(encoding)
                                         )
                                     except Exception:
-                                        if encoding == "utf8":
-                                            encoding = "Latin1"
-                                        else:
-                                            encoding = "utf8"
-                                        try:
-                                            shell.outs.write(
-                                                line.decode(encoding)
-                                            )
-                                        except Exception:
-                                            pass
-                                else:
-                                    time.sleep(1)
-                            except KeyboardInterrupt:
-                                break
+                                        pass
+                            else:
+                                time.sleep(1)
+                        except KeyboardInterrupt:
+                            break
 
 
 class CmdHead(Cmd):
@@ -1688,27 +1715,37 @@ class CmdHead(Cmd):
                 filenames.append(arg)
             idx += 1
 
+        files = []
         for filename in filenames:
             if not os.path.isabs(filename):
                 filename = shell.canon(os.path.join(shell.cwd, filename))
-            if os.path.exists(filename):
-                with open(filename, "rb") as infile:
-                    encoding = "utf8"
-                    for i in range(n):
-                        line = infile.readline()
-                        if not line:
-                            break
+            allfiles = glob.glob(filename)
+            if allfiles:
+                for file in allfiles:
+                    files.append(file)
+            else:
+                files.append(filename)
+        for filename in files:
+            if not os.path.exists(filename):
+                shell.oute.print(f"ERR: {filename} not found")
+                pass
+            with open(filename, "rb") as infile:
+                encoding = "utf8"
+                for i in range(n):
+                    line = infile.readline()
+                    if not line:
+                        break
+                    try:
+                        shell.outs.write(line.decode(encoding))
+                    except Exception:
+                        if encoding == "utf8":
+                            encoding = "Latin1"
+                        else:
+                            encoding = "utf8"
                         try:
                             shell.outs.write(line.decode(encoding))
                         except Exception:
-                            if encoding == "utf8":
-                                encoding = "Latin1"
-                            else:
-                                encoding = "utf8"
-                            try:
-                                shell.outs.write(line.decode(encoding))
-                            except Exception:
-                                pass
+                            pass
 
 
 class CmdEcho(Cmd):
@@ -1751,9 +1788,20 @@ class CmdCp(Cmd):
         ):
             shell.oute.print("ERR: cannot copy multiple files to a file")
             raise CommandFailedException()
+        files = []
         for source in sources:
             if not os.path.isabs(source):
                 source = os.path.join(shell.cwd, source)
+            allfiles = glob.glob(source)
+            if allfiles:
+                for file in allfiles:
+                    files.append(file)
+            else:
+                files.append(source)
+        for source in files:
+            if not os.path.isfile(source):
+                shell.oute.print(f"ERR: {source} not found")
+                continue
             try:
                 shutil.copy(source, dest)
             except Exception as e:
@@ -1779,9 +1827,20 @@ class CmdMv(Cmd):
         ):
             shell.oute.print("ERR: cannot move multiple files to a file")
             raise CommandFailedException()
+        files = []
         for source in sources:
             if not os.path.isabs(source):
                 source = os.path.join(shell.cwd, source)
+            allfiles = glob.glob(source)
+            if allfiles:
+                for file in allfiles:
+                    files.append(file)
+            else:
+                files.append(source)
+        for source in files:
+            if not os.path.isfile(source):
+                shell.oute.print(f"ERR: {source} not found")
+                continue
             try:
                 if (
                     os.path.isdir(dest)
@@ -1862,10 +1921,19 @@ class CmdTouch(Cmd):
         return "<filename>... : creates/changes the files"
 
     def execute(self, shell, args):
+        files = []
         for path in args:
             if not os.path.isabs(path):
                 path = os.path.join(shell.cwd, path)
-            if os.path.isdir(path):
+            allfiles = glob.glob(path)
+            if allfiles:
+                for file in allfiles:
+                    files.append(file)
+            else:
+                files.append(path)
+        for path in files:
+            if not os.path.isfile(path):
+                shell.oute.print(f"ERR: {path} is not a file")
                 continue
             try:
                 print(path)
@@ -1908,10 +1976,12 @@ class CmdMkdir(Cmd):
         return "<dir> : creates the directory"
 
     def execute(self, shell, args):
-        path = args[0]
-        if not os.path.isabs(path):
-            path = os.path.join(shell.cwd, path)
-        if not os.path.exists(path):
+        for path in args:
+            if not os.path.isabs(path):
+                path = os.path.join(shell.cwd, path)
+            if os.path.isfile(path):
+                shell.oute.print(f"ERR: {path} already exists")
+                continue
             try:
                 os.makedirs(path, exist_ok=True)
             except Exception as e:
@@ -1927,10 +1997,23 @@ class CmdRmdir(Cmd):
         return "<dir> : deletes the directory"
 
     def execute(self, shell, args):
-        path = args[0]
-        if not os.path.isabs(path):
-            path = os.path.join(shell.cwd, path)
-        if os.path.isdir(path):
+        files = []
+        for path in args:
+            if not os.path.isabs(path):
+                path = os.path.join(shell.cwd, path)
+            allfiles = glob.glob(path)
+            if allfiles:
+                for file in allfiles:
+                    files.append(file)
+            else:
+                files.append(path)
+        for path in files:
+            if os.path.isfile(path):
+                shell.oute.print(f"ERR: {path} is a file")
+                continue
+            if not os.path.exists(path):
+                shell.oute.print(f"ERR: {path} not found")
+                continue
             try:
                 # TODO only delete if empty? otherwise require -rf option?
                 shutil.rmtree(path)
@@ -2109,17 +2192,34 @@ class CmdGrep(Cmd):
         )
 
     def execute(self, shell, args):
-        pattern = args[0]
-        locations = args[1:]
+        self.case_sensitive = True
+        self.invert = False
+        self.quiet = False
+        args_ = []
+        for arg in args:
+            if arg == "-q":
+                self.quiet = True
+            elif arg == "-i":
+                self.case_sensitive = False
+            elif arg == "-v":
+                self.invert = True
+            else:
+                args_.append(arg)
+        pattern = args_[0]
+        locations = []
+        locations = args_[1:]
         if not locations:
             locations = ["."]
         try:
+            files = []
             for path in self.walk(shell.cwd, locations):
-                self.grep(shell, pattern, path)
+                files.append(path)
+            for path in files:
+                self.grep(shell, pattern, path, len(files) == 1)
         except KeyboardInterrupt:
             pass
 
-    def grep(self, shell, pattern, filepath):
+    def grep(self, shell, pattern, filepath, single_file):
         if not os.path.exists(filepath):
             return
         if filepath.startswith(shell.cwd):
@@ -2129,9 +2229,20 @@ class CmdGrep(Cmd):
         with open(filepath, encoding="utf8", errors="ignore") as infile:
             linenr = 1
             for line in infile:
-                if re.match(f".*({pattern})", line):
+                if self.case_sensitive:
+                    match = re.match(f".*({pattern})", line)
+                else:
+                    match = re.match(f".*({pattern.lower()})", line.lower())
+                if self.invert:
+                    match = not match
+                if match:
                     line = line.strip()
-                    shell.outs.print(f"{relpath} {linenr}: {line}")
+                    if self.quiet:
+                        shell.outs.print(line)
+                    elif single_file:
+                        shell.outs.print(f"{linenr}: {line}")
+                    else:
+                        shell.outs.print(f"{relpath} {linenr}: {line}")
                 linenr += 1
 
     def walk(self, cwd, locations):
