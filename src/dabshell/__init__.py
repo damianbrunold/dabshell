@@ -542,13 +542,13 @@ class Dabshell:
                 clean_s += branch
             s += " "
             clean_s += " "
-        result = s + self.cwd
+        result = s + f"{esc}[38;5;87m" + self.cwd + f"{esc}[0m"
         if len(result) > max_line_length:
             avail = max_line_length - len(clean_s) - 3
             if avail > 0:
                 idx = len(self.cwd) - avail
                 truncated = self.cwd[idx:]
-                result = s + "..." + truncated
+                result = s + f"{esc}[38;5;87m..." + truncated + f"{esc}[0m"
         return result
 
     def info_pythonproj(self):
