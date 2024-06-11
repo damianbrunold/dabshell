@@ -562,7 +562,7 @@ class Dabshell:
                 cfg = tomllib.load(infile)
                 proj = cfg.get("project")
                 if proj:
-                    self.info_pythonproj_s = proj.get("version", "")
+                    self.info_pythonproj_s = "pr=" + proj.get("version", "")
         return self.info_pythonproj_s
 
     def info_git(self):
@@ -616,7 +616,13 @@ class Dabshell:
         if venvdir:
             program = find_executable(venvdir, "python")
             if program:
-                self.info_venv_s = "venv"
+                p = subprocess.run(
+                    [program, "--version"],
+                    capture_output=True,
+                    cwd=self.cwd,
+                )
+                pyver = p.stdout.decode("utf8").strip().split(" ")[1]
+                self.info_venv_s = "py=" + pyver
         return self.info_venv_s
 
     def canon(self, path):
