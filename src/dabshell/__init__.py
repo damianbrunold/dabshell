@@ -543,7 +543,8 @@ class Dabshell:
             s += " "
             clean_s += " "
         result = s + f"{esc}[38;5;87m" + self.cwd + f"{esc}[0m"
-        if len(result) > max_line_length:
+        clean_result = s + self.cwd
+        if len(clean_result) > max_line_length:
             avail = max_line_length - len(clean_s) - 3
             if avail > 0:
                 idx = len(self.cwd) - avail
