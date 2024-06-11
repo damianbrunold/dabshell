@@ -2137,13 +2137,18 @@ class CmdHistory(Cmd):
 
     def execute(self, shell, args):
         if not args:
+            last = None
             for index, line in enumerate(shell.history):
-                shell.outs.print(f"{index} {line}")
-        else:
-            query = args[0].lower()
-            for index, line in enumerate(shell.history):
-                if line.lower().find(query) != -1:
+                if line != last:
                     shell.outs.print(f"{index} {line}")
+                    last = line
+        else:
+            query = " ".join(args).lower()
+            last = None
+            for index, line in enumerate(shell.history):
+                if line != last and line.lower().find(query) != -1:
+                    shell.outs.print(f"{index} {line}")
+                    last = line
 
 
 class CmdLHistory(Cmd):
@@ -2160,13 +2165,18 @@ class CmdLHistory(Cmd):
         if shell.cwd not in shell.local_history:
             return
         if not args:
+            last = None
             for index, line in shell.local_history[shell.cwd]:
-                shell.outs.print(f"{index} {line}")
-        else:
-            query = args[0].lower()
-            for index, line in shell.local_history[shell.cwd]:
-                if line.lower().find(query) != -1:
+                if line != last:
                     shell.outs.print(f"{index} {line}")
+                    last = line
+        else:
+            query = " ".join(args).lower()
+            last = None
+            for index, line in shell.local_history[shell.cwd]:
+                if line != last and line.lower().find(query) != -1:
+                    shell.outs.print(f"{index} {line}")
+                    last = line
 
 
 class CmdWhich(Cmd):
