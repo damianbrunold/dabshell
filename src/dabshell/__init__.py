@@ -2205,8 +2205,8 @@ class CmdGrep(Cmd):
 
     def help(self):
         return (
-            "<pattern> [<location>...]   : searches the pattern in the "
-            "files at location"
+            "<pattern> [-i] [-v] [-q] [<location>...]   : "
+            "searches the pattern in the files at location"
         )
 
     def execute(self, shell, args):
