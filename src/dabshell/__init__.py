@@ -1234,7 +1234,7 @@ class CmdEval(Cmd):
         )
 
     def execute(self, shell, args):
-        result = evaluate_expression(quote_args(args), env)
+        result = evaluate_expression(quote_args(args), shell)
         shell.outs.print(result)
 
 
