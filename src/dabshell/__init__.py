@@ -471,6 +471,7 @@ class Dabshell:
             self.init_cmd(CmdCat())
             self.init_cmd(CmdHead())
             self.init_cmd(CmdTail())
+            self.init_cmd(CmdWc())
             self.init_cmd(CmdEcho())
             self.init_cmd(CmdPrint())
             self.init_cmd(CmdGrep())
@@ -1601,6 +1602,40 @@ class CmdCat(Cmd):
                             shell.outs.write(line.decode(encoding))
                         except Exception:
                             pass
+
+
+class CmdWc(Cmd):
+    def __init__(self):
+        Cmd.__init__(self, "wc")
+
+    def help(self):
+        return (
+            "<file> ... "
+            " : returns the number of lines of the files"
+        )
+
+    def execute(self, shell, args):
+        files = []
+        for filename in args:
+            if not os.path.isabs(filename):
+                filename = shell.canon(os.path.join(shell.cwd, filename))
+            allfiles = glob.glob(filename)
+            if allfiles:
+                for file in allfiles:
+                    files.append(file)
+            else:
+                files.append(filename)
+        cwd = shell.canon(shell.cwd)
+        for filename in files:
+            if not os.path.exists(filename):
+                shell.oute.print(f"ERR: {filename} not found")
+                continue
+            fname = filename
+            if fname.startswith(cwd):
+                fname = fname[len(cwd)+1:]
+            with open(filename, "rb") as infile:
+                lines = infile.readlines()
+                shell.outs.print(f"{fname} {len(lines)}")
 
 
 class CmdTail(Cmd):
