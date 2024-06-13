@@ -1,4 +1,5 @@
 import datetime
+import difflib
 import glob
 import io
 import os
@@ -472,6 +473,7 @@ class Dabshell:
             self.init_cmd(CmdHead())
             self.init_cmd(CmdTail())
             self.init_cmd(CmdWc())
+            self.init_cmd(CmdDiff())
             self.init_cmd(CmdEcho())
             self.init_cmd(CmdPrint())
             self.init_cmd(CmdGrep())
@@ -1602,6 +1604,69 @@ class CmdCat(Cmd):
                             shell.outs.write(line.decode(encoding))
                         except Exception:
                             pass
+
+
+class CmdDiff(Cmd):
+    def __init__(self):
+        Cmd.__init__(self, "diff")
+
+    def help(self):
+        return (
+            "<file1> <file2>"
+            " : shows the differences between the two text files"
+        )
+
+    def execute(self, shell, args):
+        files = []
+        for filename in args:
+            if not os.path.isabs(filename):
+                filename = shell.canon(os.path.join(shell.cwd, filename))
+            allfiles = glob.glob(filename)
+            if allfiles:
+                for file in allfiles:
+                    files.append(file)
+            else:
+                files.append(filename)
+        cwd = shell.canon(shell.cwd)
+        file1 = files[0]
+        file2 = files[1]
+        if not os.path.exists(file1):
+            shell.oute.print(f"ERR: {file1} not found")
+            return 
+        if not os.path.exists(file2):
+            shell.oute.print(f"ERR: {file2} not found")
+            return
+        lines1 = []
+        with open(file1, "rb") as infile:
+            encoding = "utf8"
+            for line in infile:
+                try:
+                    lines1.append(line.decode(encoding))
+                except Exception:
+                    if encoding == "utf8":
+                        encoding = "Latin1"
+                    else:
+                        encoding = "utf8"
+                    try:
+                        lines1.append(line.decode(encoding))
+                    except Exception:
+                        raise ValueError(f"ERR: {file1} unknown encoding")
+        lines2 = []
+        with open(file2, "rb") as infile:
+            encoding = "utf8"
+            for line in infile:
+                try:
+                    lines2.append(line.decode(encoding))
+                except Exception:
+                    if encoding == "utf8":
+                        encoding = "Latin1"
+                    else:
+                        encoding = "utf8"
+                    try:
+                        lines2.append(line.decode(encoding))
+                    except Exception:
+                        raise ValueError(f"ERR: {file2} unknown encoding")
+        shell.outs.print("".join(difflib.ndiff(lines1, lines2)))
 
 
 class CmdWc(Cmd):
