@@ -222,9 +222,9 @@ def find_partial_executable(cwd, word):
     return sorted(results)
 
 
-def exec(s, env):
-    scriptshell = Dabshell()
-    scriptshell.env = Env(env)
+def exec(s, shell):
+    scriptshell = Dabshell(shell)
+    scriptshell.env = Env(shell.env)
     scriptshell.outs = StringOutput()
     try:
         scriptshell.execute(s)
@@ -233,7 +233,8 @@ def exec(s, env):
     return scriptshell.outs.value().strip()
 
 
-def replace_vars(s, env):
+def replace_vars(s, shell):
+    env = shell.env
     in_single_quote = False
     in_var = False
     result = ""
@@ -253,7 +254,7 @@ def replace_vars(s, env):
             level -= 1
             if level == 0:
                 if var.startswith("!"):
-                    result += exec(var[1:], env)
+                    result += exec(var[1:], shell)
                 else:
                     result += str(env.get(var, "{" + var + "}"))
                 var = ""
@@ -270,7 +271,7 @@ def replace_vars(s, env):
 
 def split_command(line, shell, with_vars=True):
     if with_vars:
-        line = replace_vars(line, shell.env)
+        line = replace_vars(line, shell)
     parts = []
     current_part = ""
     in_quote = False
@@ -1543,7 +1544,7 @@ class CmdSet(Cmd):
     def execute(self, shell, args):
         name = args[0]
         if args[1] == "exec":
-            value = exec(quote_args(args[2:]), shell.env)
+            value = exec(quote_args(args[2:]), shell)
         elif args[1] == "eval":
             value = evaluate_expression(quote_args(args[2:]), shell)
         else:
