@@ -1692,6 +1692,7 @@ class CmdWc(Cmd):
             else:
                 files.append(filename)
         cwd = shell.canon(shell.cwd)
+        total = 0
         for filename in files:
             if not os.path.exists(filename):
                 shell.oute.print(f"ERR: {filename} not found")
@@ -1701,7 +1702,11 @@ class CmdWc(Cmd):
                 fname = fname[len(cwd)+1:]
             with open(filename, "rb") as infile:
                 lines = infile.readlines()
-                shell.outs.print(f"{fname} {len(lines)}")
+                count = len(lines)
+                shell.outs.print(f"{fname} {count}")
+                total += count
+        if len(files) > 1:
+            shell.outs.print(f"Total {total}")
 
 
 class CmdTail(Cmd):
