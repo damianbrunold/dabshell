@@ -1537,9 +1537,9 @@ class CmdLs(Cmd):
 
         if "t" in opts:
             if "r" in opts:
-                entries.sort(key=lambda x: x["timestamp"], reverse=True)
-            else:
                 entries.sort(key=lambda x: x["timestamp"])
+            else:
+                entries.sort(key=lambda x: x["timestamp"], reverse=True)
         elif "S" in opts:
             if "r" in opts:
                 entries.sort(key=lambda x: x["size"])
