@@ -1482,32 +1482,90 @@ class CmdLs(Cmd):
         return "[<dir>]   : lists the contents of the directory"
 
     def execute(self, shell, args):
-        if len(args) == 0:
-            self.ls(shell, shell.canon(shell.cwd))
+        opts = []
+        dirs = []
+        for arg in args:
+            if arg.startswith("-"):
+                opts_ = list(arg[1:])
+                opts += opts_
+            else:
+                dirs.append(arg)
+        opts = set(opts)
+        if len(dirs) == 0:
+            self.ls(shell, shell.canon(shell.cwd), opts)
             return
-        for path in args:
+        files = []
+        for filename in dirs:
+            allfiles = glob.glob(filename)
+            if allfiles:
+                for file in allfiles:
+                    files.append(file)
+            else:
+                files.append(filename)
+        for path in files:
             if os.path.isabs(path):
                 path = shell.canon(path)
             else:
                 path = shell.canon(os.path.join(shell.cwd, path))
-            self.ls(shell, path)
+            self.ls(shell, path, opts)
 
-    def ls(self, shell, path):
-        if not os.path.isdir(path):
-            shell.oute.print(f"ERR: {path} is not a directory")
-            return
-        if isinstance(shell.outs, StdOutput):
-            # support colors when printing to standard output
-            for fname in sorted(os.listdir(path)):
+    def get_entry(self, shell, path, opts):
+        entry = {
+            "name": os.path.basename(path),
+            "path": path,
+        }
+        if opts:
+            s = os.stat(path)
+            t = time.gmtime(s.st_mtime)
+            entry["timestamp"] = (
+                f"{t.tm_year}-{t.tm_mon:02}-{t.tm_mday:02} "
+                f"{t.tm_hour:02}:{t.tm_min:02}:{t.tm_sec:02}"
+            )
+            entry["size"] = s.st_size
+        return entry
+
+    def ls(self, shell, path, opts):
+        entries = []
+        if os.path.isdir(path):
+            for fname in os.listdir(path):
                 fpath = os.path.join(path, fname)
-                if os.path.isdir(fpath):
-                    shell.outs.print(f"{esc}[34m{fname}{esc}[0m")
-                else:
-                    shell.outs.print(fname)
+                entries.append(self.get_entry(shell, fpath, opts))
+        elif os.path.isfile(path):
+            entries.append(self.get_entry(shell, path, opts))
         else:
-            # if output redirected, no colors
-            for fname in sorted(os.listdir(path)):
-                shell.outs.print(fname)
+            shell.oute.print(f"ERR: {path} is not a directory")
+
+        if "t" in opts:
+            if "r" in opts:
+                entries.sort(key=lambda x: x["timestamp"], reverse=True)
+            else:
+                entries.sort(key=lambda x: x["timestamp"])
+        elif "S" in opts:
+            if "r" in opts:
+                entries.sort(key=lambda x: x["size"])
+            else:
+                entries.sort(key=lambda x: x["size"], reverse=True)
+        else:
+            if "r" in opts:
+                entries.sort(key=lambda x: x["name"], reverse=True)
+            else:
+                entries.sort(key=lambda x: x["name"])
+
+        for entry in entries:
+            fname = entry["name"]
+            if isinstance(shell.outs, StdOutput):
+                if os.path.isdir(entry["path"]):
+                    pname = f"{esc}[34m{fname}{esc}[0m"
+                else:
+                    pname = fname
+            else:
+                pname = fname
+            if "l" in opts:
+                shell.outs.print(
+                    f"{entry['size']:10} {entry['timestamp']} {pname}",
+                )
+            else:
+                shell.outs.print(pname)
 
 
 class CmdCd(Cmd):
