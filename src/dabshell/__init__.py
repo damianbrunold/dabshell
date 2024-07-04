@@ -916,9 +916,6 @@ class Dabshell:
             print(path, file=outfile)
             print(command, file=outfile)
 
-    def write_history(self):
-        pass  # TODO write complete history anew, possibly truncating it
-
     def execute(self, line, history=True):
         line = line.strip()
         if not line:
