@@ -876,13 +876,13 @@ class Dabshell:
 
     def load_history(self):
         self.history = []
-        self.history_index = 0
+        self.history_index = -1
         self.history_current = ""
         self.local_history = {}
         fname = os.path.expanduser("~/.dabshell-history")
         if os.path.isfile(fname):
             with open(fname, encoding="utf8") as infile:
-                idx = 0
+                entries = []
                 while True:
                     path = infile.readline()
                     if not path:
@@ -890,13 +890,25 @@ class Dabshell:
                     command = infile.readline()
                     if not command:
                         break
-                    path = path.strip()
-                    command = command.strip()
-                    self.history.append(command)
-                    if path not in self.local_history:
-                        self.local_history[path] = []
-                    self.local_history[path].append((idx, command))
-                    idx += 1
+                    entries.append((path.strip(), command.strip()))
+            if len(entries) > 1000:
+                # compress older entries
+                idx = len(entries) - 1000
+                older = entries[0:idx]
+                newer = entries[idx:]
+                older = list(sorted(set(older)))
+                entries = older + newer
+                # write compressed entries to file
+                with open(fname, "w", encoding="utf8") as outfile:
+                    for path, command in entries:
+                        print(path, file=outfile)
+                        print(command, file=outfile)
+            for idx, entry in enumerate(entries):
+                path, command = entry
+                self.history.append(command)
+                if path not in self.local_history:
+                    self.local_history[path] = []
+                self.local_history[path].append((idx, command))
 
     def append_history(self, path, command):
         fname = os.path.expanduser("~/.dabshell-history")
@@ -914,10 +926,10 @@ class Dabshell:
         cmd, args = split_command(line, self)
         if history and cmd != "history" and cmd != "lhistory":
             if not self.history or self.history[-1] != line:
+                idx = len(self.history)
                 self.history.append(line)
                 if self.cwd not in self.local_history:
                     self.local_history[self.cwd] = []
-                idx = len(self.history)
                 self.local_history[self.cwd].append((idx, line))
                 self.append_history(self.cwd, line)
             self.history_index = -1
