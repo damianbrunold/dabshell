@@ -706,12 +706,22 @@ class Dabshell:
             key = self.inp.getch()
 
             if key == KEY_TAB:
+                cmd = None
                 if self.line.strip() and self.index == len(self.line):
                     cmd, args = split_command(
                         self.line,
                         self,
                         with_vars=False,
                     )
+                    rest = ""
+                elif self.line.strip() and self.line[self.index] == " ":
+                    rest = self.line[self.index:]
+                    cmd, args = split_command(
+                        self.line[:self.index],
+                        self,
+                        with_vars=False,
+                    )
+                if cmd:
                     parts = [cmd, *args]
                     word = parts[-1]
                     only_dir = cmd in ["cd"]
@@ -721,17 +731,18 @@ class Dabshell:
                     )
                     if completed and parts[-1] != completed:
                         parts[-1] = completed
-                        self.line = quote_args(parts)
+                        self.line = quote_args(parts) + rest
                         self.index = len(self.line)
                     elif tabbed:
-                        self.outp.print()
-                        s = " ".join([
-                            os.path.basename(p)
-                            for p in potentials
-                        ])
-                        if len(s) > max_line_length - 1:
-                            s = s[:max_line_length-4] + "..."
-                        self.outp.print(s)
+                        if potentials:
+                            self.outp.print()
+                            s = " ".join([
+                                os.path.basename(p)
+                                for p in potentials
+                            ])
+                            if len(s) > max_line_length - 1:
+                                s = s[:max_line_length-4] + "..."
+                            self.outp.print(s)
                         tabbed = False
                     else:
                         tabbed = True
