@@ -2006,7 +2006,7 @@ class CmdMv(Cmd):
         Cmd.__init__(self, "mv")
 
     def help(self):
-        return "<srcfiles>... <dest> : moves one or multiple files"
+        return "<src>... <dest> : moves one or multiple files or dirs"
 
     def execute(self, shell, args):
         sources = args[:-1]
@@ -2030,21 +2030,28 @@ class CmdMv(Cmd):
             else:
                 files.append(source)
         for source in files:
-            if not os.path.isfile(source):
+            if not os.path.exists(source):
                 shell.oute.print(f"ERR: {source} not found")
                 continue
-            try:
-                if (
-                    os.path.isdir(dest)
-                    and os.path.isfile(
-                        os.path.join(dest, os.path.basename(source))
-                    )
-                ):
-                    os.remove(os.path.join(dest, os.path.basename(source)))
-                shutil.move(source, dest)
-            except Exception as e:
-                shell.oute.print(str(e))
-                raise CommandFailedException()
+            if os.path.isfile(source):
+                try:
+                    if (
+                        os.path.isdir(dest)
+                        and os.path.isfile(
+                            os.path.join(dest, os.path.basename(source))
+                        )
+                    ):
+                        os.remove(os.path.join(dest, os.path.basename(source)))
+                    shutil.move(source, dest)
+                except Exception as e:
+                    shell.oute.print(str(e))
+                    raise CommandFailedException()
+            elif os.path.isdir(source):
+                try:
+                    shutil.move(source, dest)
+                except Exception as e:
+                    shell.oute.print(str(e))
+                    raise CommandFailedException()
 
 
 class CmdTree(Cmd):
