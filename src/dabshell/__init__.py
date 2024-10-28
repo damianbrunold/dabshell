@@ -950,26 +950,29 @@ class Dabshell:
         self.info_pythonproj_cwd = None
         self.info_git_cwd = None
         self.info_venv_cwd = None
-        try:
-            cmd_ = self.env.get(cmd)
-            if isinstance(cmd_, CmdAliasDefinition):
-                cmd, args = split_command(
-                    cmd_.value + " " + quote_args(args),
-                    self,
-                )
+        cmds = line.split("&&")
+        for cmd_args in cmds:
+            cmd, args = split_command(cmd_args, self)
+            try:
                 cmd_ = self.env.get(cmd)
-            if cmd_ and isinstance(cmd_, Cmd):
-                cmd_.execute(self, args)
-            elif cmd == "exit":
-                return False
-            elif cmd.endswith(".dsh"):
-                self.env.get("script").execute(self, [cmd, *args])
-            else:
-                self.env.get("run").execute(self, [cmd, *args])
-                if IS_WIN and history:
-                    os.system("title " + self.title)
-        except KeyboardInterrupt:
-            pass
+                if isinstance(cmd_, CmdAliasDefinition):
+                    cmd, args = split_command(
+                        cmd_.value + " " + quote_args(args),
+                        self,
+                    )
+                    cmd_ = self.env.get(cmd)
+                if cmd_ and isinstance(cmd_, Cmd):
+                    cmd_.execute(self, args)
+                elif cmd == "exit":
+                    return False
+                elif cmd.endswith(".dsh"):
+                    self.env.get("script").execute(self, [cmd, *args])
+                else:
+                    self.env.get("run").execute(self, [cmd, *args])
+                    if IS_WIN and history:
+                        os.system("title " + self.title)
+            except KeyboardInterrupt:
+                pass
         return True
 
 
