@@ -950,7 +950,7 @@ class Dabshell:
         self.info_pythonproj_cwd = None
         self.info_git_cwd = None
         self.info_venv_cwd = None
-        cmds = line.split(" && ")
+        cmds = line.split(" && ")  # TODO only split if && is not in quoted arg
         for cmd_args in cmds:
             cmd, args = split_command(cmd_args, self)
             try:
