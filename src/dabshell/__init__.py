@@ -335,6 +335,19 @@ def quote_args(args):
     return " ".join([quote_arg(arg) for arg in args])
 
 
+def get_os_env(env):
+    result = {}
+    result.update(os.environ)
+    for name in env.names():
+        if not name.startswith("env:"):
+            continue
+        value = env.get(name)
+        name = name[len("env:"):]
+        if value is not None:
+            result[name] = str(value)
+    return result
+
+
 class Env:
     def __init__(self, parent=None):
         self.mappings = {}
@@ -1092,6 +1105,7 @@ class CmdRun(Cmd):
                         *args,
                     ],
                     cwd=shell.cwd,
+                    env=get_os_env(shell.env),
                     capture_output=True,
                 )
                 shell.outs.write(p.stdout.decode("utf8"))
@@ -1105,6 +1119,7 @@ class CmdRun(Cmd):
                         *args,
                     ],
                     cwd=shell.cwd,
+                    env=get_os_env(shell.env),
                     stdout=shell.outs.out,
                     stderr=shell.oute.out,
                 )
@@ -1642,7 +1657,13 @@ class CmdGet(Cmd):
 
     def execute(self, shell, args):
         try:
-            shell.outs.print(shell.env.get(args[0]))
+            if not args:
+                for name in shell.env.names():
+                    shell.outs.print(
+                        f"{name}={shell.env.get(name)}"
+                    )
+            else:
+                shell.outs.print(shell.env.get(args[0]))
         except ValueError:
             pass
 
