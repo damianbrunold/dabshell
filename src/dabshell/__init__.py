@@ -195,6 +195,12 @@ def find_executable(cwd, executable):
     return result
 
 
+def find_executable_venv(venvdir, executable):
+    scriptfolder = "Scripts" if IS_WIN else "bin"
+    venv = os.path.join(venvdir, scriptfolder)
+    return find_executable_(venv, executable)
+
+
 def collect_partial_executables(path, word, results):
     if not os.path.isdir(path):
         return
@@ -632,7 +638,7 @@ class Dabshell:
         else:
             venvdir = None
         if venvdir:
-            program = find_executable(venvdir, "python")
+            program = find_executable_venv(venvdir, "python")
             if program:
                 p = subprocess.run(
                     [program, "--version"],
