@@ -1133,8 +1133,6 @@ class CmdRun(Cmd):
                     raise CommandFailedException()
         except CommandFailedException:
             raise
-        except KeyboardInterrupt:
-            pass
         except Exception as e:
             shell.oute.print(e)
 
@@ -1303,7 +1301,10 @@ class CmdScript(Cmd):
             scriptshell.env.set(f"arg{idx}", arg)
         scriptshell.env.set("args", quote_args(args))
         with open(scriptfile, encoding="utf8") as infile:
-            self.execute_lines(scriptshell, infile.readlines())
+            try:
+                self.execute_lines(scriptshell, infile.readlines())
+            except KeyboardInterrupt:
+                pass
         CmdRedirect().execute(shell, ["off"])
 
     def execute_lines(self, shell, lines):
