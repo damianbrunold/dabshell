@@ -116,6 +116,15 @@ class RawInput:
                     n = ord(ch)
                     if n == 0x1b:
                         return KEY_ESC
+                    elif n == 0x4f:
+                        ch = sys.stdin.read(1)
+                        n = ord(ch)
+                        if n == 0x44: return KEY_LEFT
+                        elif n == 0x43: return KEY_RIGHT
+                        elif n == 0x41: return KEY_UP
+                        elif n == 0x42: return KEY_DOWN
+                        elif n == 0x48: return KEY_HOME
+                        elif n == 0x46: return KEY_END
                     elif n == 0x5b:
                         ch = sys.stdin.read(1)
                         n = ord(ch)
