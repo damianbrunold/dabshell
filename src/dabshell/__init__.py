@@ -1915,135 +1915,237 @@ class CmdRun(Cmd):
         shell._run_external(cmd, args, stdin_data, history=True)
 
 
-def evaluate_expression(expr, shell):
-    a, b = split_command(expr, shell)
-    parts = [a, *b]
-    if len(parts) == 3:
-        lhs = parts[0]
-        op = parts[1]
-        rhs = parts[2]
-        if op == "<":
-            return int(lhs) < int(rhs)
-        elif op == "<=":
-            return int(lhs) <= int(rhs)
-        elif op == ">":
-            return int(lhs) > int(rhs)
-        elif op == ">=":
-            return int(lhs) >= int(rhs)
-        elif op == "+":
-            return int(lhs) + int(rhs)
-        elif op == "-":
-            return int(lhs) - int(rhs)
-        elif op == "*":
-            return int(lhs) * int(rhs)
-        elif op == "/":
-            return int(lhs) // int(rhs)
-        elif op == "%":
-            return int(lhs) % int(rhs)
-        elif op == "**":
-            return int(lhs) ** int(rhs)
-        elif op == "==":
-            return lhs == rhs
-        elif op == "!=":
-            return lhs != rhs
-        elif op == "==|ci":
-            lhs = lhs.lower()
-            rhs = rhs.lower()
-            return lhs == rhs
-        elif op == "!=|ci":
-            lhs = lhs.lower()
-            rhs = rhs.lower()
-            return lhs != rhs
-        elif op == "*=":
-            return lhs.endswith(rhs) or rhs.endswith(lhs)
-        elif op == "=*":
-            return lhs.startswith(rhs) or rhs.startswith(lhs)
-        elif op == "*=|ci":
-            lhs = lhs.lower()
-            rhs = rhs.lower()
-            return lhs.endswith(rhs) or rhs.endswith(lhs)
-        elif op == "=*|ci":
-            lhs = lhs.lower()
-            rhs = rhs.lower()
-            return lhs.startswith(rhs) or rhs.startswith(lhs)
+def _tokenize_expr(s):
+    """Tokenise an expression string into a list of string tokens.
+
+    Rules (applied in order):
+    - Double-quoted spans are kept as a single token (quotes stripped).
+      An empty quoted string \"\" produces an empty-string token.
+      Inside quotes: \\\" → literal "  and  \\\\ → literal \\.
+    - '(' and ')' are always single-character tokens.
+    - Whitespace separates tokens.
+    - Variable expansion has already happened before this is called.
+    """
+    tokens = []
+    i = 0
+    current = []
+    in_quote = False
+    current_quoted = False   # True if any quoted span contributed to current
+    while i < len(s):
+        ch = s[i]
+        if in_quote:
+            if ch == '\\' and i + 1 < len(s) and s[i + 1] in ('"', '\\'):
+                current.append(s[i + 1])
+                i += 2
+                continue
+            elif ch == '"':
+                in_quote = False
+            else:
+                current.append(ch)
         else:
-            raise ValueError(f"unknown operator {op}")
-    elif len(parts) == 2:
-        pred = parts[0]
-        value = parts[1]
+            if ch == '"':
+                in_quote = True
+                current_quoted = True
+            elif ch in '()':
+                if current or current_quoted:
+                    tokens.append(''.join(current))
+                    current = []
+                    current_quoted = False
+                tokens.append(ch)
+            elif ch == ' ':
+                if current or current_quoted:
+                    tokens.append(''.join(current))
+                    current = []
+                    current_quoted = False
+            else:
+                current.append(ch)
+        i += 1
+    if current or current_quoted:
+        tokens.append(''.join(current))
+    return tokens
+
+
+def _eval_primary(tokens, pos, shell):
+    """Evaluate a primary expression (no and/or/not) from *tokens[pos:]*.
+
+    A primary is one of:
+      - a parenthesised sub-expression  ( expr )
+      - a 3-token binary   lhs op rhs
+      - a 2-token predicate pred value
+      - a 1-token literal  value
+
+    Returns (result, new_pos).
+    """
+    _KEYWORDS = {"and", "or", "not"}
+
+    if pos >= len(tokens):
+        raise ValueError("unexpected end of expression")
+
+    if tokens[pos] == '(':
+        # parenthesised sub-expression
+        result, pos = _eval_or(tokens, pos + 1, shell)
+        if pos >= len(tokens) or tokens[pos] != ')':
+            raise ValueError("missing closing ')'")
+        return result, pos + 1
+
+    # Collect consecutive non-keyword, non-paren tokens as a primary.
+    # We try 3 tokens first, then 2, then 1 so that the longest match wins.
+    collected = []
+    _PARENS = {"(", ")"}
+    while pos < len(tokens) and tokens[pos] not in _KEYWORDS and tokens[pos] not in _PARENS:
+        collected.append(tokens[pos])
+        pos += 1
+
+    if not collected:
+        raise ValueError(f"unexpected token '{tokens[pos]}' in expression")
+
+    # Dispatch based on the collected token count, exactly as before.
+    if len(collected) == 3:
+        lhs, op, rhs = collected
+        if op == "<":
+            return int(lhs) < int(rhs), pos
+        elif op == "<=":
+            return int(lhs) <= int(rhs), pos
+        elif op == ">":
+            return int(lhs) > int(rhs), pos
+        elif op == ">=":
+            return int(lhs) >= int(rhs), pos
+        elif op == "+":
+            return int(lhs) + int(rhs), pos
+        elif op == "-":
+            return int(lhs) - int(rhs), pos
+        elif op == "*":
+            return int(lhs) * int(rhs), pos
+        elif op == "/":
+            return int(lhs) // int(rhs), pos
+        elif op == "%":
+            return int(lhs) % int(rhs), pos
+        elif op == "**":
+            return int(lhs) ** int(rhs), pos
+        elif op == "==":
+            return lhs == rhs, pos
+        elif op == "!=":
+            return lhs != rhs, pos
+        elif op in ("==ci", "==|ci"):
+            return lhs.lower() == rhs.lower(), pos
+        elif op in ("!=ci", "!=|ci"):
+            return lhs.lower() != rhs.lower(), pos
+        elif op == "*=":
+            return lhs.endswith(rhs) or rhs.endswith(lhs), pos
+        elif op == "=*":
+            return lhs.startswith(rhs) or rhs.startswith(lhs), pos
+        elif op in ("*=ci", "*=|ci"):
+            return lhs.lower().endswith(rhs.lower()) or rhs.lower().endswith(lhs.lower()), pos
+        elif op in ("=*ci", "=*|ci"):
+            return lhs.lower().startswith(rhs.lower()) or rhs.lower().startswith(lhs.lower()), pos
+        elif op == "lt":
+            return int(lhs) < int(rhs), pos
+        elif op == "lteq":
+            return int(lhs) <= int(rhs), pos
+        elif op == "gt":
+            return int(lhs) > int(rhs), pos
+        elif op == "gteq":
+            return int(lhs) >= int(rhs), pos
+        else:
+            raise ValueError(f"unknown operator '{op}'")
+
+    elif len(collected) == 2:
+        pred, value = collected
         if pred == "exists":
             if not os.path.isabs(value):
                 value = os.path.join(shell.cwd, value)
-            if os.path.exists(value):
-                return "yes"
-            else:
-                return ""
-        elif pred == "not-exists" or pred == "exists-not":
+            return ("yes" if os.path.exists(value) else ""), pos
+        elif pred in ("not-exists", "exists-not"):
             if not os.path.isabs(value):
                 value = os.path.join(shell.cwd, value)
-            if not os.path.exists(value):
-                return "yes"
-            else:
-                return ""
+            return ("yes" if not os.path.exists(value) else ""), pos
         elif pred == "is-file":
             if not os.path.isabs(value):
                 value = os.path.join(shell.cwd, value)
-            if os.path.isfile(value):
-                return "yes"
-            else:
-                return ""
-        elif pred == "not-is-file" or pred == "is-not-file":
+            return ("yes" if os.path.isfile(value) else ""), pos
+        elif pred in ("not-is-file", "is-not-file"):
             if not os.path.isabs(value):
                 value = os.path.join(shell.cwd, value)
-            if os.path.isfile(value):
-                return ""
-            else:
-                return "yes"
+            return ("yes" if not os.path.isfile(value) else ""), pos
         elif pred == "is-dir":
             if not os.path.isabs(value):
                 value = os.path.join(shell.cwd, value)
-            if os.path.isdir(value):
-                return "yes"
-            else:
-                return ""
+            return ("yes" if os.path.isdir(value) else ""), pos
         elif pred in ("not-is-dir", "is-not-dir"):
             if not os.path.isabs(value):
                 value = os.path.join(shell.cwd, value)
-            if os.path.isdir(value):
-                return ""
-            else:
-                return "yes"
+            return ("yes" if not os.path.isdir(value) else ""), pos
         elif pred == "has-extension":
-            base, ext = os.path.splitext(value)
-            if ext == value:
-                return "yes"
-            else:
-                return ""
+            _, ext = os.path.splitext(value)
+            return ("yes" if ext == value else ""), pos
         elif pred in ("not-has-extension", "has-not-extension"):
-            base, ext = os.path.splitext(value)
-            if ext == value:
-                return ""
-            else:
-                return "yes"
+            _, ext = os.path.splitext(value)
+            return ("yes" if ext != value else ""), pos
         elif pred == "is-empty":
-            if value == "":
-                return "yes"
-            else:
-                return ""
-        elif pred == "not-is-empty" or pred == "is-not-empty":
-            if value == "":
-                return ""
-            else:
-                return "yes"
+            return ("yes" if value == "" else ""), pos
+        elif pred in ("not-is-empty", "is-not-empty"):
+            return ("yes" if value != "" else ""), pos
         else:
-            raise ValueError(f"unknown pred {pred}")
-    elif len(parts) == 1:
-        arg = parts[0]
+            raise ValueError(f"unknown predicate '{pred}'")
+
+    else:  # 1 token
+        arg = collected[0]
         try:
-            return int(arg)
-        except Exception:
-            return arg
-    raise ValueError(f"cannot evaluate {expr}")
+            return int(arg), pos
+        except ValueError:
+            return arg, pos
+
+
+def _eval_not(tokens, pos, shell):
+    """Handle unary 'not': not <not_expr> | primary."""
+    if pos < len(tokens) and tokens[pos] == "not":
+        val, pos = _eval_not(tokens, pos + 1, shell)
+        return ("" if val else "yes"), pos
+    return _eval_primary(tokens, pos, shell)
+
+
+def _eval_and(tokens, pos, shell):
+    """Handle 'and' (higher precedence than 'or')."""
+    left, pos = _eval_not(tokens, pos, shell)
+    while pos < len(tokens) and tokens[pos] == "and":
+        right, pos = _eval_not(tokens, pos + 1, shell)
+        # Short-circuit: if left is falsy return '' immediately,
+        # else return the right-hand value (like Python's 'and').
+        left = right if left else ""
+    return left, pos
+
+
+def _eval_or(tokens, pos, shell):
+    """Handle 'or' (lowest precedence)."""
+    left, pos = _eval_and(tokens, pos, shell)
+    while pos < len(tokens) and tokens[pos] == "or":
+        right, pos = _eval_and(tokens, pos + 1, shell)
+        # Short-circuit: return left if truthy, else right.
+        left = left if left else right
+    return left, pos
+
+
+def evaluate_expression(expr, shell):
+    """Evaluate *expr* in the context of *shell* and return the result.
+
+    Supports:
+    - Arithmetic:  +  -  *  /  %  **
+    - Comparison:  ==  !=  ==ci  !=ci  <  <=  >  >=  lt  lteq  gt  gteq
+                   =*  *=  =*ci  *=ci  (and legacy |ci variants)
+    - Predicates:  exists  is-file  is-dir  is-empty  has-extension  …
+    - Boolean:     and  or  not
+    - Grouping:    ( … )
+    """
+    expr = replace_vars(expr, shell)
+    tokens = _tokenize_expr(expr)
+    if not tokens:
+        return ""
+    result, pos = _eval_or(tokens, 0, shell)
+    if pos != len(tokens):
+        raise ValueError(
+            f"unexpected token '{tokens[pos]}' after expression"
+        )
+    return result
 
 
 class CmdEval(Cmd):

@@ -789,21 +789,28 @@ eval 2 ** 8        # 256
 |----------|---------|
 | `==` | Equal (string) |
 | `!=` | Not equal (string) |
-| `==\|ci` | Equal, case-insensitive |
-| `!=\|ci` | Not equal, case-insensitive |
+| `==ci` | Equal, case-insensitive |
+| `!=ci` | Not equal, case-insensitive |
 | `<` | Less than (integer) |
 | `<=` | Less than or equal (integer) |
 | `>` | Greater than (integer) |
 | `>=` | Greater than or equal (integer) |
+| `lt` | Less than (integer) — unambiguous alias for `<` |
+| `lteq` | Less than or equal (integer) — unambiguous alias for `<=` |
+| `gt` | Greater than (integer) — unambiguous alias for `>` |
+| `gteq` | Greater than or equal (integer) — unambiguous alias for `>=` |
 | `=*` | Starts with (either side) |
 | `*=` | Ends with (either side) |
-| `=*\|ci` | Starts with, case-insensitive |
-| `*=\|ci` | Ends with, case-insensitive |
+| `=*ci` | Starts with, case-insensitive |
+| `*=ci` | Ends with, case-insensitive |
+
+The symbolic operators `<`, `>`, `<=`, `>=` are interpreted by the shell as redirect operators when used in a command line. Use the word aliases (`lt`, `gt`, `lteq`, `gteq`) to avoid quoting or redirection ambiguity in scripts. The symbolic forms still work when properly quoted: `eval "5 > 3"`.
 
 ```
 eval {name} == Alice
-eval {ext} *=|ci .PY
-eval {count} >= 10
+eval {ext} *=ci .PY
+eval {count} gteq 10
+eval {n} lt 100
 ```
 
 ### Predicates (two-part expressions)
@@ -833,6 +840,39 @@ end
 if is-not-empty {arg0}
     set target {arg0}
 end
+```
+
+### Boolean operators and parentheses
+
+Expressions can be combined using `and`, `or`, and `not`. Parentheses control grouping. These work in `eval`, `if`, `while`, and `set … eval`.
+
+| Operator | Meaning |
+|----------|---------|
+| `not <expr>` | True if `<expr>` is falsy, false otherwise |
+| `<expr> and <expr>` | True if both sides are truthy (short-circuits) |
+| `<expr> or <expr>` | True if either side is truthy (short-circuits) |
+| `( <expr> )` | Group sub-expressions to control precedence |
+
+Precedence (highest to lowest): `not` > `and` > `or`. Use parentheses to override.
+
+```
+if is-file config.json and is-not-empty {target}
+    print building {target}
+end
+
+if {score} gteq 0 and {score} lteq 100
+    print valid score
+end
+
+if not exists output/ or not is-file output/result.txt
+    print output missing
+end
+
+if ( {mode} == fast or {mode} == turbo ) and is-not-empty {input}
+    print running in {mode} mode
+end
+
+set ok eval is-file src.txt and not is-file dst.txt
 ```
 
 ---
