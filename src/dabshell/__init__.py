@@ -71,6 +71,18 @@ KEY_CTRL_Z = -126
 
 
 class RawInput:
+    def __init__(self):
+        # On Linux we put the terminal into raw mode once and leave it there
+        # for the whole session, rather than toggling on every keypress.
+        if not IS_WIN:
+            self._old_settings = termios.tcgetattr(sys.stdin)
+            tty.setraw(sys.stdin)
+
+    def close(self):
+        """Restore the terminal to its original settings (Linux only)."""
+        if not IS_WIN:
+            termios.tcsetattr(sys.stdin, termios.TCSADRAIN, self._old_settings)
+
     def getch(self):
         if IS_WIN:
             ch = msvcrt.getwch()
@@ -90,6 +102,8 @@ class RawInput:
                 elif n == 0x74: return KEY_CTRL_RIGHT
                 elif n == 0x8d: return KEY_CTRL_UP
                 elif n == 0x91: return KEY_CTRL_DOWN
+                # Unknown extended key — consume it and return None
+                return None
             elif n == 0x8:
                 return KEY_BACKSPACE
             elif n == 0x9:
@@ -100,86 +114,123 @@ class RawInput:
                 return KEY_CR
             elif n == 0x1b:
                 return KEY_ESC
-            elif n <= 26:
-                return -100 - n  # implicitly map to KEY_CTRL_*
+            elif 1 <= n <= 26:   # Ctrl+A .. Ctrl+Z  (exclude 0 = Ctrl+Space)
+                return -100 - n
             else:
                 return ch
         else:
-            self.init()
-            try:
+            return self._getch_linux()
+
+    def _getch_linux(self):
+        ch = sys.stdin.read(1)
+        n = ord(ch)
+
+        if n == 0x1b:
+            # Check if more bytes follow within a short timeout.
+            # A lone ESC has no follow-up; an escape sequence does.
+            ready = select.select([sys.stdin], [], [], 0.05)[0]
+            if not ready:
+                return KEY_ESC
+
+            ch = sys.stdin.read(1)
+            n = ord(ch)
+
+            if n == 0x1b:
+                # Double-ESC → treat as ESC
+                return KEY_ESC
+
+            elif n == 0x4f:
+                # SS3 sequences:  ESC O X
                 ch = sys.stdin.read(1)
                 n = ord(ch)
-                if n == 0x1b:
-                    # Check if more bytes follow within a short timeout.
-                    # A lone ESC has no follow-up; an escape sequence does.
-                    ready = select.select([sys.stdin], [], [], 0.05)[0]
-                    if not ready:
-                        return KEY_ESC
-                    ch = sys.stdin.read(1)
-                    n = ord(ch)
-                    if n == 0x1b:
-                        return KEY_ESC
-                    elif n == 0x4f:
-                        ch = sys.stdin.read(1)
-                        n = ord(ch)
-                        if n == 0x44: return KEY_LEFT
-                        elif n == 0x43: return KEY_RIGHT
-                        elif n == 0x41: return KEY_UP
-                        elif n == 0x42: return KEY_DOWN
-                        elif n == 0x48: return KEY_HOME
-                        elif n == 0x46: return KEY_END
-                    elif n == 0x5b:
-                        ch = sys.stdin.read(1)
-                        n = ord(ch)
-                        if n == 0x44: return KEY_LEFT
-                        elif n == 0x43: return KEY_RIGHT
-                        elif n == 0x41: return KEY_UP
-                        elif n == 0x42: return KEY_DOWN
-                        elif n == 0x48: return KEY_HOME
-                        elif n == 0x46: return KEY_END
-                        elif n == 0x31:
-                            sys.stdin.read(1)  # skip ; 0x3b
-                            n = ord(sys.stdin.read(1))
-                            if n == 0x35:
-                                n = ord(sys.stdin.read(1))
-                                if n == 0x44: return KEY_CTRL_LEFT
-                                elif n == 0x43: return KEY_CTRL_RIGHT
-                                elif n == 0x41: return KEY_CTRL_UP
-                                elif n == 0x42: return KEY_CTRL_DOWN
-                        elif n == 0x33:
-                            sys.stdin.read(1)  # skip 0x7e
-                            return KEY_DELETE
-                        elif n == 0x35:
-                            sys.stdin.read(1)  # skip 0x7e
-                            return KEY_PAGEUP
-                        elif n == 0x36:
-                            sys.stdin.read(1)  # skip 0x7e
-                            return KEY_PAGEDOWN
-                elif n == 0x7f:
-                    return KEY_BACKSPACE
-                elif n == 0x9:
-                    return KEY_TAB
-                elif n == 0xa:
-                    return KEY_LF
-                elif n == 0xd:
-                    return KEY_CR
-                elif n <= 26:
-                    return -100 - n  # implicitly map to KEY_CTRL_*
-                else:
-                    return ch
-            finally:
-                self.restore()
+                if n == 0x41: return KEY_UP
+                elif n == 0x42: return KEY_DOWN
+                elif n == 0x43: return KEY_RIGHT
+                elif n == 0x44: return KEY_LEFT
+                elif n == 0x46: return KEY_END
+                elif n == 0x48: return KEY_HOME
+                # F1-F4 (ESC O P/Q/R/S) and any other SS3 byte —
+                # unrecognised but fully consumed; return ESC so the
+                # caller gets something sensible.
+                return KEY_ESC
 
-    def init(self):
-        self.old_settings = termios.tcgetattr(sys.stdin)
-        tty.setraw(sys.stdin)
+            elif n == 0x5b:
+                # CSI sequences:  ESC [ ...
+                ch = sys.stdin.read(1)
+                n = ord(ch)
 
-    def restore(self):
-        termios.tcsetattr(
-            sys.stdin,
-            termios.TCSADRAIN,
-            self.old_settings,
-        )
+                # Simple one-byte CSI finals
+                if n == 0x41: return KEY_UP
+                elif n == 0x42: return KEY_DOWN
+                elif n == 0x43: return KEY_RIGHT
+                elif n == 0x44: return KEY_LEFT
+                elif n == 0x46: return KEY_END
+                elif n == 0x48: return KEY_HOME
+
+                # Tilde-terminated sequences:  ESC [ N ~
+                # Also used for Home/End on some terminals:
+                #   ESC [ 1 ~  →  Home
+                #   ESC [ 4 ~  →  End
+                elif n == 0x31:
+                    next_ch = sys.stdin.read(1)
+                    next_n  = ord(next_ch)
+                    if next_n == 0x7e:          # ESC [ 1 ~  →  Home
+                        return KEY_HOME
+                    elif next_n == 0x3b:        # ESC [ 1 ;  →  modifier sequence
+                        mod  = ord(sys.stdin.read(1))
+                        final = ord(sys.stdin.read(1))
+                        if mod == 0x35:         # Ctrl  (modifier 5)
+                            if final == 0x41: return KEY_CTRL_UP
+                            elif final == 0x42: return KEY_CTRL_DOWN
+                            elif final == 0x43: return KEY_CTRL_RIGHT
+                            elif final == 0x44: return KEY_CTRL_LEFT
+                        # Other modifiers (Shift=2, Alt=3, Shift+Alt=4,
+                        # Shift+Ctrl=6, Alt+Ctrl=7, Shift+Alt+Ctrl=8):
+                        # consume and return ESC — don't leak bytes.
+                        return KEY_ESC
+                    # Any other byte after ESC [ 1 — consume and return ESC
+                    return KEY_ESC
+                elif n == 0x32:
+                    sys.stdin.read(1)           # consume trailing ~
+                    return KEY_ESC              # Insert key — not used, return ESC
+                elif n == 0x33:
+                    sys.stdin.read(1)           # consume trailing ~
+                    return KEY_DELETE
+                elif n == 0x34:
+                    sys.stdin.read(1)           # consume trailing ~  →  End
+                    return KEY_END
+                elif n == 0x35:
+                    sys.stdin.read(1)           # consume trailing ~
+                    return KEY_PAGEUP
+                elif n == 0x36:
+                    sys.stdin.read(1)           # consume trailing ~
+                    return KEY_PAGEDOWN
+                elif n == 0x37:
+                    sys.stdin.read(1)           # consume trailing ~  →  Home
+                    return KEY_HOME
+                elif n == 0x38:
+                    sys.stdin.read(1)           # consume trailing ~  →  End
+                    return KEY_END
+
+                # Unknown CSI sequence — the final byte is already consumed;
+                # return ESC so the caller gets a safe non-None value.
+                return KEY_ESC
+
+            # Unknown byte after ESC — return ESC, byte already consumed.
+            return KEY_ESC
+
+        elif n == 0x7f:
+            return KEY_BACKSPACE
+        elif n == 0x9:
+            return KEY_TAB
+        elif n == 0xa:
+            return KEY_LF   # also Ctrl+J — intentional
+        elif n == 0xd:
+            return KEY_CR
+        elif 1 <= n <= 26:  # Ctrl+A .. Ctrl+Z  (exclude 0 = Ctrl+Space)
+            return -100 - n
+        else:
+            return ch
 
 
 def find_executable_(path, executable):
@@ -540,10 +591,10 @@ class Env:
         self.parent = parent
 
     def names(self):
-        result = list(self.mappings.keys())
+        result = set(self.mappings.keys())
         if self.parent:
-            result += self.parent.names()
-        return sorted(set(result))
+            result |= set(self.parent.names())
+        return sorted(result)
 
     def get(self, name, default=None):
         if name in self.mappings:
@@ -746,7 +797,7 @@ class Dabshell:
         self.info_pythonproj_cwd = None
         self.info_pythonproj_s = ""
         self.info_git_cwd = None
-        self.info_git_s = ""
+        self.info_git_s = ("", False)
         self.info_venv_cwd = None
         self.info_venv_s = ""
         self._git_executable = shutil.which("git")
@@ -969,7 +1020,15 @@ class Dabshell:
                     + f"{esc}[1m{esc}[4m" + hit + f"{esc}[0m"
                     + after
                 )
-        prompt = f"(reverse-i-search)`{query}': {match_str}"
+        prefix = f"(reverse-i-search)`{query}': "
+        # Truncate the visible part so the line never exceeds terminal width.
+        # match_str may contain ANSI escapes; measure by visible length of match.
+        visible_match = match if match is not None else ""
+        avail = max(0, self.max_line_length - len(prefix))
+        if len(visible_match) > avail:
+            # Trim the un-highlighted match_str to the available space
+            match_str = visible_match[:avail]
+        prompt = prefix + match_str
         self.outp.out.write(f"{esc}[1000D")   # move to column 0
         self.outp.out.write(prompt)
         self.outp.out.write(f"{esc}[0K")       # erase to end of line
@@ -1002,287 +1061,295 @@ class Dabshell:
     def run(self):
         self.outp.write(self.prompt() + "\n")
         tabbed = False
-        while True:
-            self.max_line_length = shutil.get_terminal_size().columns - 1
-            key = self.inp.getch()
+        try:
+            while True:
+                self.max_line_length = shutil.get_terminal_size().columns - 1
+                key = self.inp.getch()
+                if key is None:
+                    continue   # unrecognised escape sequence — ignore silently
 
-            # ── Reverse-i-search mode ────────────────────────────────────
-            if self._search_active:
-                if key == KEY_CTRL_R:
-                    # Cycle to the next older match
-                    next_pos = self._search_pos - 1 if self._search_pos > 0 else -1
-                    pos, match = self._search_match(self._search_query, next_pos)
-                    if pos is not None:
-                        self._search_pos = pos
-                    self._search_redraw(
-                        self._search_query,
-                        match if pos is not None else None,
-                    )
-                    continue
+                # ── Reverse-i-search mode ────────────────────────────────────
+                if self._search_active:
+                    if key == KEY_CTRL_R:
+                        # Cycle to the next older match
+                        next_pos = self._search_pos - 1 if self._search_pos > 0 else -1
+                        pos, match = self._search_match(self._search_query, next_pos)
+                        if pos is not None:
+                            self._search_pos = pos
+                        self._search_redraw(
+                            self._search_query,
+                            match if pos is not None else None,
+                        )
+                        continue
 
-                elif key == KEY_BACKSPACE:
-                    self._search_query = self._search_query[:-1]
-                    pos, match = self._search_match(
-                        self._search_query, -1
-                    )
-                    self._search_pos = pos if pos is not None else -1
-                    self._search_redraw(self._search_query, match)
-                    continue
-
-                elif key in (KEY_LF, KEY_CR):
-                    # Accept: load match into line buffer ready for editing.
-                    # Overwrite the search prompt in place — no new line needed.
-                    entries = self.local_history.get(self.cwd, [])
-                    if self._search_pos is not None and 0 <= self._search_pos < len(entries):
-                        _, matched_cmd = entries[self._search_pos]
-                    else:
-                        matched_cmd = ""
-                    self._search_active = False
-                    self._search_query  = ""
-                    self._search_pos    = -1
-                    self.line  = matched_cmd
-                    self.index = len(self.line)
-                    self._redraw_line()
-                    continue
-
-                elif key == KEY_UP:
-                    # Cycle to the next older match (same as Ctrl+R)
-                    next_pos = self._search_pos - 1 if self._search_pos > 0 else -1
-                    pos, match = self._search_match(self._search_query, next_pos)
-                    if pos is not None:
-                        self._search_pos = pos
-                    self._search_redraw(
-                        self._search_query,
-                        match if pos is not None else None,
-                    )
-                    continue
-
-                elif key == KEY_DOWN:
-                    # Cycle to the next newer match
-                    entries = self.local_history.get(self.cwd, [])
-                    if self._search_pos is not None and self._search_pos < len(entries) - 1:
-                        start = self._search_pos + 1
-                        # Search forward from start toward the newest entry
-                        match_found = None
-                        pos_found = None
-                        for i in range(start, len(entries)):
-                            _, cmd = entries[i]
-                            if self._search_query.lower() in cmd.lower():
-                                pos_found = i
-                                match_found = cmd
-                                break
-                        if pos_found is not None:
-                            self._search_pos = pos_found
-                        self._search_redraw(self._search_query, match_found)
-                    else:
-                        # Already at newest match — nothing to do
-                        entries = self.local_history.get(self.cwd, [])
-                        match = None
-                        if self._search_pos is not None and 0 <= self._search_pos < len(entries):
-                            _, match = entries[self._search_pos]
-                        self._search_redraw(self._search_query, match)
-                    continue
-
-                elif key in (KEY_ESC, KEY_CTRL_C):
-                    # Cancel: restore the line that was active before search
-                    self._search_active = False
-                    self._search_query  = ""
-                    self._search_pos    = -1
-                    self.outp.out.write(f"{esc}[1000D{esc}[0K")
-                    self.outp.out.flush()
-                    # self.line is unchanged — it held the pre-search content
-                    self.index = len(self.line)
-                    # Fall through to normal line-redraw
-
-                else:
-                    # Printable character: refine the search query
-                    if isinstance(key, str):
-                        self._search_query += key
-                        pos, match = self._search_match(self._search_query, -1)
+                    elif key == KEY_BACKSPACE:
+                        self._search_query = self._search_query[:-1]
+                        pos, match = self._search_match(
+                            self._search_query, -1
+                        )
                         self._search_pos = pos if pos is not None else -1
                         self._search_redraw(self._search_query, match)
                         continue
-                    # Any other key (arrows, function keys, etc.): accept
-                    # current match, exit search, then handle key normally.
-                    entries = self.local_history.get(self.cwd, [])
-                    if self._search_pos is not None and 0 <= self._search_pos < len(entries):
-                        _, matched_cmd = entries[self._search_pos]
+
+                    elif key in (KEY_LF, KEY_CR):
+                        # Accept: load match into line buffer ready for editing.
+                        # Overwrite the search prompt in place — no new line needed.
+                        entries = self.local_history.get(self.cwd, [])
+                        if self._search_pos is not None and 0 <= self._search_pos < len(entries):
+                            _, matched_cmd = entries[self._search_pos]
+                        else:
+                            matched_cmd = ""
+                        self._search_active = False
+                        self._search_query  = ""
+                        self._search_pos    = -1
+                        self.line  = matched_cmd
+                        self.index = len(self.line)
+                        self._redraw_line()
+                        continue
+
+                    elif key == KEY_UP:
+                        # Cycle to the next older match (same as Ctrl+R)
+                        next_pos = self._search_pos - 1 if self._search_pos > 0 else -1
+                        pos, match = self._search_match(self._search_query, next_pos)
+                        if pos is not None:
+                            self._search_pos = pos
+                        self._search_redraw(
+                            self._search_query,
+                            match if pos is not None else None,
+                        )
+                        continue
+
+                    elif key == KEY_DOWN:
+                        # Cycle to the next newer match
+                        entries = self.local_history.get(self.cwd, [])
+                        if self._search_pos is not None and self._search_pos < len(entries) - 1:
+                            start = self._search_pos + 1
+                            # Search forward from start toward the newest entry
+                            match_found = None
+                            pos_found = None
+                            for i in range(start, len(entries)):
+                                _, cmd = entries[i]
+                                if self._search_query.lower() in cmd.lower():
+                                    pos_found = i
+                                    match_found = cmd
+                                    break
+                            if pos_found is not None:
+                                self._search_pos = pos_found
+                            self._search_redraw(self._search_query, match_found)
+                        else:
+                            # Already at newest match — nothing to do
+                            entries = self.local_history.get(self.cwd, [])
+                            match = None
+                            if self._search_pos is not None and 0 <= self._search_pos < len(entries):
+                                _, match = entries[self._search_pos]
+                            self._search_redraw(self._search_query, match)
+                        continue
+
+                    elif key in (KEY_ESC, KEY_CTRL_C):
+                        # Cancel: restore the line that was active before search
+                        self._search_active = False
+                        self._search_query  = ""
+                        self._search_pos    = -1
+                        self.outp.out.write(f"{esc}[1000D{esc}[0K")
+                        self.outp.out.flush()
+                        # self.line is unchanged — it held the pre-search content
+                        self.index = len(self.line)
+                        # Fall through to normal line-redraw
+
                     else:
-                        matched_cmd = self.line  # nothing found — keep current
-                    self._search_active = False
+                        # Printable character: refine the search query
+                        if isinstance(key, str):
+                            self._search_query += key
+                            pos, match = self._search_match(self._search_query, -1)
+                            self._search_pos = pos if pos is not None else -1
+                            self._search_redraw(self._search_query, match)
+                            continue
+                        # Any other key (arrows, function keys, etc.): accept
+                        # current match, exit search, then handle key normally.
+                        entries = self.local_history.get(self.cwd, [])
+                        if self._search_pos is not None and 0 <= self._search_pos < len(entries):
+                            _, matched_cmd = entries[self._search_pos]
+                        else:
+                            matched_cmd = self.line  # nothing found — keep current
+                        self._search_active = False
+                        self._search_query  = ""
+                        self._search_pos    = -1
+                        self.outp.out.write(f"{esc}[1000D{esc}[0K")
+                        self.outp.out.flush()
+                        self.line  = matched_cmd
+                        self.index = len(self.line)
+                        # Do NOT continue — fall through so the key is processed
+
+                # ── Normal editing mode ──────────────────────────────────────
+                if key == KEY_CTRL_R:
+                    # Enter search mode, saving whatever is in the line buffer
+                    self._search_active = True
                     self._search_query  = ""
                     self._search_pos    = -1
-                    self.outp.out.write(f"{esc}[1000D{esc}[0K")
-                    self.outp.out.flush()
-                    self.line  = matched_cmd
-                    self.index = len(self.line)
-                    # Do NOT continue — fall through so the key is processed
-
-            # ── Normal editing mode ──────────────────────────────────────
-            if key == KEY_CTRL_R:
-                # Enter search mode, saving whatever is in the line buffer
-                self._search_active = True
-                self._search_query  = ""
-                self._search_pos    = -1
-                self._search_redraw("", None)
-                continue
-
-            if key == KEY_TAB:
-                cmd = None
-                rest = ""
-                if self.line.strip() and self.index == len(self.line):
-                    cmd, args = split_command(
-                        self.line,
-                        self,
-                        with_vars=False,
-                    )
-                elif self.line.strip() and self.index < len(self.line) and self.line[self.index] == " ":
-                    rest = self.line[self.index:]
-                    cmd, args = split_command(
-                        self.line[:self.index],
-                        self,
-                        with_vars=False,
-                    )
-                if cmd:
-                    parts = [cmd, *args]
-                    word = parts[-1]
-                    only_dir = cmd in ["cd"]
-                    completed, potentials = self.complete_word(
-                        word,
-                        only_dir=only_dir,
-                    )
-                    if completed and parts[-1] != completed:
-                        parts[-1] = completed
-                        self.line = quote_args(parts) + rest
-                        self.index = len(self.line)
-                    elif tabbed:
-                        if potentials:
-                            self.outp.print()
-                            s = " ".join([
-                                os.path.basename(p)
-                                for p in potentials
-                            ])
-                            if len(s) > self.max_line_length - 1:
-                                s = s[:self.max_line_length-4] + "..."
-                            self.outp.print(s)
-                        tabbed = False
-                    else:
-                        tabbed = True
-            else:
-                tabbed = False
-
-            if key == KEY_CTRL_C:
-                if self.line == "":
-                    break
-                else:
-                    os.system("")
-                    self.outp.write("\n" + self.prompt() + "\n")
-                    self.line = ""
-                    self.index = 0
+                    self._search_redraw("", None)
                     continue
-            elif key == KEY_LF or key == KEY_CR:
-                if re.match("^![0-9]+$", self.line):
-                    hidx = int(self.line[1:])
-                    if 0 <= hidx <= len(self.history)-1:
-                        self.line = self.history[hidx]
-                        self.index = len(self.line)
+
+                if key == KEY_TAB:
+                    cmd = None
+                    rest = ""
+                    if self.line.strip() and self.index == len(self.line):
+                        cmd, args = split_command(
+                            self.line,
+                            self,
+                            with_vars=False,
+                        )
+                    elif self.line.strip() and self.index < len(self.line) and self.line[self.index] == " ":
+                        rest = self.line[self.index:]
+                        cmd, args = split_command(
+                            self.line[:self.index],
+                            self,
+                            with_vars=False,
+                        )
+                    if cmd:
+                        parts = [cmd, *args]
+                        word = parts[-1]
+                        only_dir = cmd in ["cd"]
+                        completed, potentials = self.complete_word(
+                            word,
+                            only_dir=only_dir,
+                        )
+                        if completed and parts[-1] != completed:
+                            parts[-1] = completed
+                            self.line = quote_args(parts) + rest
+                            self.index = len(self.line)
+                        elif tabbed:
+                            if potentials:
+                                self.outp.print()
+                                s = " ".join([
+                                    os.path.basename(p)
+                                    for p in potentials
+                                ])
+                                if len(s) > self.max_line_length - 1:
+                                    s = s[:self.max_line_length-4] + "..."
+                                self.outp.print(s)
+                            tabbed = False
+                        else:
+                            tabbed = True
                 else:
-                    self.outs.print()
-                    try:
-                        if not self.execute(self.line):
-                            break
-                    except CommandFailedException:
-                        pass
-                    except Exception as e:
-                        self.oute.print(str(e))
-                    os.system("")
-                    self.outp.write(self.prompt() + "\n")
+                    tabbed = False
+
+                if key == KEY_CTRL_C:
+                    if self.line == "":
+                        break
+                    else:
+                        os.system("")
+                        self.outp.write("\n" + self.prompt() + "\n")
+                        self.line = ""
+                        self.index = 0
+                        continue
+                elif key == KEY_LF or key == KEY_CR:
+                    if re.match("^![0-9]+$", self.line):
+                        hidx = int(self.line[1:])
+                        if 0 <= hidx <= len(self.history)-1:
+                            self.line = self.history[hidx]
+                            self.index = len(self.line)
+                    else:
+                        self.outs.print()
+                        try:
+                            if not self.execute(self.line):
+                                break
+                        except CommandFailedException:
+                            pass
+                        except Exception as e:
+                            self.oute.print(str(e))
+                        os.system("")
+                        self.outp.write(self.prompt() + "\n")
+                        self.line = ""
+                        self.index = 0
+                elif key == KEY_ESC:
                     self.line = ""
                     self.index = 0
-            elif key == KEY_ESC:
-                self.line = ""
-                self.index = 0
-                self.history_index = -1
-                self.history_current = ""
-            elif key == KEY_BACKSPACE:
-                if self.index > 0:
-                    pre = self.line[:self.index-1]
-                    post = self.line[self.index:]
-                    self.line = pre + post
-                    self.index -= 1
-            elif key == KEY_CTRL_W:
-                idx = self.index - 1
-                while idx > 0 and self.line[idx] == " ":
-                    idx -= 1
-                while idx > 0 and self.line[idx] != " ":
-                    idx -= 1
-                delta = self.index - idx
-                self.line = self.line[0:idx] + self.line[self.index:]
-                self.index -= delta
-                self.index = min(len(self.line), self.index)
-            elif key == KEY_LEFT:
-                self.index = max(0, self.index-1)
-            elif key == KEY_RIGHT:
-                self.index = min(len(self.line), self.index+1)
-            elif key == KEY_DELETE:
-                if self.index < len(self.line):
-                    pre = self.line[:self.index]
-                    post = self.line[self.index+1:]
-                    self.line = pre + post
-            elif key == KEY_HOME:
-                self.index = 0
-            elif key == KEY_END:
-                self.index = len(self.line)
-            elif key == KEY_UP:
-                if self.history:
-                    if self.history_index == -1:
-                        self.history_current = self.line
-                        self.history_index = len(self.history)-1
-                        self.line = self.history[self.history_index]
-                        self.index = len(self.line)
-                    elif self.history_index > 0:
-                        self.history_index -= 1
-                        self.line = self.history[self.history_index]
-                        self.index = len(self.line)
-            elif key == KEY_DOWN:
-                if self.history and self.history_index != -1:
-                    if self.history_index < len(self.history)-1:
-                        self.history_index += 1
-                        self.line = self.history[self.history_index]
-                        self.index = len(self.line)
-                    else:
-                        self.line = self.history_current
-                        self.history_index = -1
-                        self.history_current = ""
-                        self.index = len(self.line)
-            elif key == KEY_CTRL_LEFT:
-                new_idx = self.index - 1
-                while new_idx >= 0 and self.line[new_idx] == ' ':
-                    new_idx -= 1
-                while new_idx >= 0 and self.line[new_idx] != ' ':
-                    new_idx -= 1
-                new_idx += 1
-                if new_idx >= 0:
-                    self.index = new_idx
-                else:
+                    self.history_index = -1
+                    self.history_current = ""
+                elif key == KEY_BACKSPACE:
+                    if self.index > 0:
+                        pre = self.line[:self.index-1]
+                        post = self.line[self.index:]
+                        self.line = pre + post
+                        self.index -= 1
+                elif key == KEY_CTRL_W:
+                    idx = self.index - 1
+                    while idx >= 0 and self.line[idx] == " ":
+                        idx -= 1
+                    while idx >= 0 and self.line[idx] != " ":
+                        idx -= 1
+                    # idx is now -1 (delete to start) or pointing at a space
+                    idx += 1
+                    self.line = self.line[0:idx] + self.line[self.index:]
+                    self.index = idx
+                elif key == KEY_LEFT:
+                    self.index = max(0, self.index-1)
+                elif key == KEY_RIGHT:
+                    self.index = min(len(self.line), self.index+1)
+                elif key == KEY_DELETE:
+                    if self.index < len(self.line):
+                        pre = self.line[:self.index]
+                        post = self.line[self.index+1:]
+                        self.line = pre + post
+                elif key == KEY_HOME:
                     self.index = 0
-            elif key == KEY_CTRL_RIGHT:
-                new_idx = self.index + 1
-                while new_idx < len(self.line) and self.line[new_idx] != ' ':
-                    new_idx += 1
-                while new_idx < len(self.line) and self.line[new_idx] == ' ':
-                    new_idx += 1
-                if new_idx < len(self.line):
-                    self.index = new_idx
-                else:
+                elif key == KEY_END:
                     self.index = len(self.line)
-            elif isinstance(key, str):
-                pre = self.line[:self.index]
-                post = self.line[self.index:]
-                self.line = pre + key + post
-                self.index += 1
+                elif key == KEY_UP:
+                    if self.history:
+                        if self.history_index == -1:
+                            self.history_current = self.line
+                            self.history_index = len(self.history)-1
+                            self.line = self.history[self.history_index]
+                            self.index = len(self.line)
+                        elif self.history_index > 0:
+                            self.history_index -= 1
+                            self.line = self.history[self.history_index]
+                            self.index = len(self.line)
+                elif key == KEY_DOWN:
+                    if self.history and self.history_index != -1:
+                        if self.history_index < len(self.history)-1:
+                            self.history_index += 1
+                            self.line = self.history[self.history_index]
+                            self.index = len(self.line)
+                        else:
+                            self.line = self.history_current
+                            self.history_index = -1
+                            self.history_current = ""
+                            self.index = len(self.line)
+                elif key == KEY_CTRL_LEFT:
+                    if self.index == 0:
+                        pass   # already at start, nothing to do
+                    else:
+                        new_idx = self.index - 1
+                        while new_idx > 0 and self.line[new_idx] == ' ':
+                            new_idx -= 1
+                        while new_idx > 0 and self.line[new_idx] != ' ':
+                            new_idx -= 1
+                        # If we stopped at a space, step forward one to the word start
+                        if new_idx > 0:
+                            new_idx += 1
+                        self.index = new_idx
+                elif key == KEY_CTRL_RIGHT:
+                    new_idx = self.index + 1
+                    while new_idx < len(self.line) and self.line[new_idx] != ' ':
+                        new_idx += 1
+                    while new_idx < len(self.line) and self.line[new_idx] == ' ':
+                        new_idx += 1
+                    if new_idx < len(self.line):
+                        self.index = new_idx
+                    else:
+                        self.index = len(self.line)
+                elif isinstance(key, str):
+                    pre = self.line[:self.index]
+                    post = self.line[self.index:]
+                    self.line = pre + key + post
+                    self.index += 1
 
-            self._redraw_line()
+                self._redraw_line()
+
+        finally:
+            self.inp.close()
 
     def load_history(self):
         self.history = []
@@ -3662,36 +3729,6 @@ class CmdFile(Cmd):
 
         return None
 
-
-class RawInputTest:
-    def getch(self):
-        if IS_WIN:
-            ch = msvcrt.getwch()
-            n = ord(ch)
-            print(n, hex(n))
-            return ch
-        else:
-            self.init()
-            n = None
-            ch = None
-            try:
-                ch = sys.stdin.read(1)
-                n = ord(ch)
-            finally:
-                self.restore()
-            print(n, hex(n))
-            return ch
-
-    def init(self):
-        self.old_settings = termios.tcgetattr(sys.stdin)
-        tty.setraw(sys.stdin)
-
-    def restore(self):
-        termios.tcsetattr(
-            sys.stdin,
-            termios.TCSADRAIN,
-            self.old_settings,
-        )
 
 def dabshell():
     Dabshell(init_shell=True).run()
