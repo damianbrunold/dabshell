@@ -4,13 +4,62 @@ A lightweight, cross-platform interactive shell written in pure Python. dabshell
 
 ---
 
-## Installation and startup
+## Installation
 
-Copy `__init__.py` to a directory of your choice and run it directly:
+dabshell is installed from source by cloning the repository, building a wheel, and installing it locally.
 
+### Prerequisites
+
+- Python 3.11 or higher
+- `pip` and `build` available in your Python environment
+
+### Steps
+
+**1. Clone the repository**
+
+```bash
+git clone https://github.com/damianbrunold/dabshell
+cd dabshell
 ```
-python __init__.py
+
+**2. Build the wheel**
+
+```bash
+pip install build       # if not already installed
+python -m build
 ```
+
+This produces a `.whl` file in the `dist/` directory (e.g. `dist/dabshell-0.0.4-py3-none-any.whl`).
+
+**3. Install the wheel**
+
+```bash
+pip install dist/dabshell-0.0.4-py3-none-any.whl
+```
+
+Replace 0.0.4 with the current version number.
+
+Once installed, the `dsh` command will be available in your PATH.
+
+Of course, it generally is better to create a local virtual environment and install into this and not in the global one.
+
+### Upgrading
+
+When a new version is available, repeat the build and install steps. To replace the previously installed version, pass the `--force-reinstall` flag:
+
+```bash
+pip install --force-reinstall dist/dabshell-0.0.4-py3-none-any.whl
+```
+
+### Uninstalling
+
+```bash
+pip uninstall dabshell
+```
+
+---
+
+### Startup configuration
 
 On startup, dabshell reads `~/.dabshell` if it exists and executes it as a script. Use this file to define aliases, set variables, configure options, and so on.
 
