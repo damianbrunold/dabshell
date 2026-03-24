@@ -4195,9 +4195,25 @@ def dabshell():
     """
     if len(sys.argv) > 1:
         # Non-interactive mode: run a script and exit.
+        #
+        # Capture the OS cwd NOW, before init_shell sources ~/.dabshell.
+        # That config may contain cd commands which change shell.cwd;
+        # we need the directory dsh was actually launched from so we can
+        # (a) resolve a relative script path correctly, and
+        # (b) restore shell.cwd to that directory afterward.
+        #
+        # Note: subprocess.run passes cwd=self.cwd to the child process,
+        # so when dsh is invoked from within a running dsh instance,
+        # os.getcwd() here correctly returns the parent shell's cwd.
+        invocation_cwd = os.getcwd()
         scriptfile = sys.argv[1]
+        if not os.path.isabs(scriptfile):
+            scriptfile = os.path.normpath(os.path.join(invocation_cwd, scriptfile))
         script_args = sys.argv[2:]
         shell = Dabshell(init_shell=True)
+        # Restore cwd to where dsh was invoked from, overriding any cd
+        # commands that ran during ~/.dabshell initialisation.
+        shell.cwd = shell.canon(invocation_cwd)
         try:
             shell.env.get("script").execute(shell, [scriptfile, *script_args])
         except CommandFailedException:
