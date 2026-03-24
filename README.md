@@ -519,6 +519,20 @@ title My Project
 #### `reset-term`
 Reset the terminal state. Useful if the terminal display becomes corrupted.
 
+#### `time <cmd> [<arg>...]`
+Execute a command and print the elapsed wall-clock time to stderr when it finishes. The output format mirrors the Linux `time` built-in: seconds only for runs under one minute, or `Xm Y.YYYs` for longer runs. The timed command is not added to history.
+```
+time python myscript.py
+time grep -r TODO .
+time make && echo done
+```
+
+Example output:
+```
+real	0.341s
+real	2m14.007s
+```
+
 #### `run <command> [<arg>...]`
 Explicitly run an external command. Normally you do not need this — any unrecognised command name is passed to the OS automatically. `run` is useful when you need to be explicit or when the command name clashes with something in the environment.
 ```

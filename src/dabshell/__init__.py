@@ -781,6 +781,7 @@ class Dabshell:
             self.init_cmd(CmdOption())
             self.init_cmd(CmdOptions())
             self.init_cmd(CmdResetTerm())
+            self.init_cmd(CmdTime())
         self.history = []
         self.history_index = -1
         self.history_current = ""
@@ -3728,6 +3729,32 @@ class CmdFile(Cmd):
                 pass
 
         return None
+
+
+class CmdTime(Cmd):
+    def __init__(self):
+        Cmd.__init__(self, "time")
+
+    def help(self):
+        return "<cmd> [<arg>...]   : execute a command and print its elapsed time"
+
+    def execute(self, shell, args):
+        if not args:
+            shell.oute.print("ERR: time requires a command to execute")
+            return
+        cmd_line = quote_args(args)
+        start = time.perf_counter()
+        try:
+            shell.execute(cmd_line, history=False)
+        except CommandFailedException:
+            pass
+        elapsed = time.perf_counter() - start
+        minutes = int(elapsed // 60)
+        seconds = elapsed - minutes * 60
+        if minutes > 0:
+            shell.oute.print(f"\nreal\t{minutes}m{seconds:.3f}s")
+        else:
+            shell.oute.print(f"\nreal\t{elapsed:.3f}s")
 
 
 def dabshell():
