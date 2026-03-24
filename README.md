@@ -519,6 +519,49 @@ title My Project
 #### `reset-term`
 Reset the terminal state. Useful if the terminal display becomes corrupted.
 
+### File conversion
+
+These commands convert text files in place. Each file is read, transformed, and written back only if the content actually changed. Binary files are detected automatically and skipped. Glob patterns are accepted.
+
+Each command prints one of the following per file:
+- `converted <path>` — file was changed
+- `unchanged <path>` — file was already in the target format
+- `skipped <path>: <reason>` — file was not modified (binary, UTF-16, or unencodable characters)
+- `ERR: …` — file could not be read or written
+
+#### `to-lf <file>...`
+Convert all line endings to LF (`\n`, Unix style). CRLF and bare CR are both normalised. The file encoding is preserved, including any UTF-8 BOM.
+```
+to-lf notes.txt
+to-lf *.py
+```
+
+#### `to-crlf <file>...`
+Convert all line endings to CRLF (`\r\n`, Windows style). Mixed or bare-LF line endings are both normalised. The file encoding is preserved, including any UTF-8 BOM.
+```
+to-crlf report.txt
+to-crlf *.csv
+```
+
+#### `to-utf8 <file>...`
+Re-encode the file as UTF-8 without BOM. Latin-1 and UTF-8-BOM files are converted; plain UTF-8 files are left unchanged. Line endings are preserved.
+```
+to-utf8 legacy.txt
+to-utf8 *.html
+```
+
+#### `to-utf8-bom <file>...`
+Re-encode the file as UTF-8 with a BOM prefix (`\xef\xbb\xbf`). Useful for tools (such as Excel) that require a BOM to recognise UTF-8. Line endings are preserved.
+```
+to-utf8-bom data.csv
+```
+
+#### `to-latin1 <file>...`
+Re-encode the file as Latin-1 (ISO 8859-1). If the file contains characters that cannot be represented in Latin-1 (e.g. CJK characters, emoji), the file is skipped and a message is printed. Line endings are preserved.
+```
+to-latin1 old-system-export.txt
+```
+
 #### `watch [-n <seconds>] <cmd> [<arg>...]`
 Run a command repeatedly, clearing the screen and redisplaying its output each time. Output is capped to one screen so the display never scrolls. Press `Ctrl+C` to stop.
 

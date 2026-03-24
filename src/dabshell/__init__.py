@@ -614,6 +614,51 @@ def get_os_env(env):
     return result
 
 
+# ── Text-file encoding/line-ending helpers ────────────────────────────────────
+
+def _detect_file_encoding(raw):
+    """Return (encoding, has_bom) for a bytes object.
+
+    Checks for UTF-8 BOM, UTF-16 LE/BE BOMs, then tries UTF-8,
+    then falls back to Latin-1 (which never raises).
+    UTF-16 files are flagged but not supported for conversion.
+    """
+    if raw[:3] == b"\xef\xbb\xbf":
+        return "utf-8-sig", True      # utf-8-sig strips the BOM on decode
+    if raw[:2] in (b"\xff\xfe", b"\xfe\xff"):
+        return "utf-16", True
+    try:
+        raw.decode("utf-8")
+        return "utf-8", False
+    except UnicodeDecodeError:
+        return "latin-1", False
+
+
+def _is_binary(raw):
+    """Return True if *raw* looks like binary data (>10 % non-text bytes)."""
+    if not raw:
+        return False
+    non_text = sum(
+        1 for b in raw[:8192]
+        if b < 0x09 or (0x0e <= b <= 0x1f) or b == 0x7f
+    )
+    return non_text / min(len(raw), 8192) > 0.10
+
+
+def _collect_files(shell, args):
+    """Expand args (with glob support) into a list of absolute file paths."""
+    files = []
+    for arg in args:
+        if not os.path.isabs(arg):
+            arg = os.path.join(shell.cwd, arg)
+        matched = sorted(glob.glob(arg))
+        if matched:
+            files.extend(matched)
+        else:
+            files.append(arg)
+    return files
+
+
 class Env:
     def __init__(self, parent=None):
         self.mappings = {}
@@ -809,6 +854,11 @@ class Dabshell:
             self.init_cmd(CmdOption())
             self.init_cmd(CmdOptions())
             self.init_cmd(CmdResetTerm())
+            self.init_cmd(CmdToCrlf())
+            self.init_cmd(CmdToLf())
+            self.init_cmd(CmdToUtf8())
+            self.init_cmd(CmdToUtf8Bom())
+            self.init_cmd(CmdToLatin1())
             self.init_cmd(CmdWatch())
             self.init_cmd(CmdTime())
         self.history = []
@@ -1725,6 +1775,50 @@ class Cmd:
 
     def __str__(self):
         return self.name
+
+
+class CmdConvertBase(Cmd):
+    """Shared implementation for in-place text-file conversion commands."""
+
+    def _convert(self, shell, args, transform):
+        """Read each file, apply *transform(raw) -> (new_raw, reason)*, write back.
+
+        *transform* receives the raw bytes and returns (new_bytes, skipped_reason)
+        where skipped_reason is None on success or a string explaining why the
+        file was skipped unchanged.
+        """
+        if not args:
+            shell.oute.print(f"ERR: {self.name} requires at least one file")
+            return
+        files = _collect_files(shell, args)
+        for path in files:
+            if not os.path.exists(path):
+                shell.oute.print(f"ERR: {path} not found")
+                continue
+            if os.path.isdir(path):
+                shell.oute.print(f"ERR: {path} is a directory")
+                continue
+            try:
+                with open(path, "rb") as fh:
+                    raw = fh.read()
+            except OSError as e:
+                shell.oute.print(f"ERR: {path}: {e}")
+                continue
+            if _is_binary(raw):
+                shell.oute.print(f"skipped {path}: binary file")
+                continue
+            new_raw, reason = transform(raw)
+            if reason:
+                shell.outs.print(f"skipped {path}: {reason}")
+            elif new_raw == raw:
+                shell.outs.print(f"unchanged {path}")
+            else:
+                try:
+                    with open(path, "wb") as fh:
+                        fh.write(new_raw)
+                    shell.outs.print(f"converted {path}")
+                except OSError as e:
+                    shell.oute.print(f"ERR: {path}: {e}")
 
 
 class CmdAliasDefinition(Cmd):
@@ -3803,6 +3897,99 @@ class CmdFile(Cmd):
                 pass
 
         return None
+
+
+class CmdToCrlf(CmdConvertBase):
+    def __init__(self):
+        Cmd.__init__(self, "to-crlf")
+
+    def help(self):
+        return "<file>...   : convert line endings to CRLF (Windows) in place"
+
+    def execute(self, shell, args):
+        def transform(raw):
+            enc, _ = _detect_file_encoding(raw)
+            if enc == "utf-16":
+                return raw, "UTF-16 not supported"
+            text = raw.decode(enc)
+            # Normalise to bare LF first, then add CR
+            normalised = text.replace("\r\n", "\n").replace("\r", "\n")
+            converted = normalised.replace("\n", "\r\n")
+            # Re-encode preserving the original encoding (utf-8-sig writes BOM)
+            return converted.encode(enc), None
+        self._convert(shell, args, transform)
+
+
+class CmdToLf(CmdConvertBase):
+    def __init__(self):
+        Cmd.__init__(self, "to-lf")
+
+    def help(self):
+        return "<file>...   : convert line endings to LF (Unix) in place"
+
+    def execute(self, shell, args):
+        def transform(raw):
+            enc, _ = _detect_file_encoding(raw)
+            if enc == "utf-16":
+                return raw, "UTF-16 not supported"
+            text = raw.decode(enc)
+            converted = text.replace("\r\n", "\n").replace("\r", "\n")
+            return converted.encode(enc), None
+        self._convert(shell, args, transform)
+
+
+class CmdToUtf8(CmdConvertBase):
+    def __init__(self):
+        Cmd.__init__(self, "to-utf8")
+
+    def help(self):
+        return "<file>...   : convert encoding to UTF-8 (no BOM) in place"
+
+    def execute(self, shell, args):
+        def transform(raw):
+            enc, _ = _detect_file_encoding(raw)
+            if enc == "utf-16":
+                return raw, "UTF-16 not supported"
+            text = raw.decode(enc)
+            return text.encode("utf-8"), None
+        self._convert(shell, args, transform)
+
+
+class CmdToUtf8Bom(CmdConvertBase):
+    def __init__(self):
+        Cmd.__init__(self, "to-utf8-bom")
+
+    def help(self):
+        return "<file>...   : convert encoding to UTF-8 with BOM in place"
+
+    def execute(self, shell, args):
+        def transform(raw):
+            enc, _ = _detect_file_encoding(raw)
+            if enc == "utf-16":
+                return raw, "UTF-16 not supported"
+            text = raw.decode(enc)
+            return b"\xef\xbb\xbf" + text.encode("utf-8"), None
+        self._convert(shell, args, transform)
+
+
+class CmdToLatin1(CmdConvertBase):
+    def __init__(self):
+        Cmd.__init__(self, "to-latin1")
+
+    def help(self):
+        return "<file>...   : convert encoding to Latin-1 (ISO-8859-1) in place"
+
+    def execute(self, shell, args):
+        def transform(raw):
+            enc, _ = _detect_file_encoding(raw)
+            if enc == "utf-16":
+                return raw, "UTF-16 not supported"
+            text = raw.decode(enc)
+            try:
+                return text.encode("latin-1"), None
+            except UnicodeEncodeError as e:
+                return raw, f"contains characters not representable in Latin-1: {e}"
+        self._convert(shell, args, transform)
 
 
 class CmdWatch(Cmd):
