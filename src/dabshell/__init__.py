@@ -12,8 +12,6 @@ import time
 import tomllib
 
 
-max_line_length = shutil.get_terminal_size().columns - 1
-
 esc = "\u001b"
 
 IS_WIN = platform.system() == "Windows"
@@ -112,6 +110,11 @@ class RawInput:
                 ch = sys.stdin.read(1)
                 n = ord(ch)
                 if n == 0x1b:
+                    # Check if more bytes follow within a short timeout.
+                    # A lone ESC has no follow-up; an escape sequence does.
+                    ready = select.select([sys.stdin], [], [], 0.05)[0]
+                    if not ready:
+                        return KEY_ESC
                     ch = sys.stdin.read(1)
                     n = ord(ch)
                     if n == 0x1b:
@@ -206,8 +209,11 @@ def collect_partial_executables(path, word, results):
         return
     for fname in os.listdir(path):
         if fname.startswith(word):
+            fullpath = os.path.join(path, fname)
             if fname.endswith(".exe") or fname.endswith(".dsh"):
                 fname = fname[:-4]
+            elif not IS_WIN and not os.access(fullpath, os.X_OK):
+                continue
             results.append(fname)
 
 
@@ -228,7 +234,7 @@ def find_partial_executable(cwd, word):
     return sorted(results)
 
 
-def exec(s, shell):
+def shell_exec(s, shell):
     scriptshell = Dabshell(shell)
     scriptshell.env = Env(shell.env)
     scriptshell.outs = StringOutput()
@@ -260,7 +266,7 @@ def replace_vars(s, shell):
             level -= 1
             if level == 0:
                 if var.startswith("!"):
-                    result += exec(var[1:], shell)
+                    result += shell_exec(var[1:], shell)
                 else:
                     result += str(env.get(var, "{" + var + "}"))
                 var = ""
@@ -323,6 +329,8 @@ def split_command(line, shell, with_vars=True):
         idx += 1
     if current_part:
         parts.append(current_part)
+    if not parts:
+        return "", []
     return parts[0], parts[1:]
 
 
@@ -339,6 +347,169 @@ def quote_arg(arg):
 
 def quote_args(args):
     return " ".join([quote_arg(arg) for arg in args])
+
+
+class Stage:
+    """One command in a pipeline, with its redirect annotations stripped out."""
+    __slots__ = (
+        "raw",
+        "stdout_file", "stdout_append",
+        "stderr_file", "stderr_append",
+        "both_file",   "both_append",
+    )
+
+    def __init__(self, raw):
+        self.raw = raw.strip()
+        self.stdout_file   = None
+        self.stdout_append = False
+        self.stderr_file   = None
+        self.stderr_append = False
+        self.both_file     = None   # &>  / &>>  (stdout + stderr together)
+        self.both_append   = False
+
+
+def _tokenize_unquoted(s):
+    """Yield (token_string, is_quoted) pairs by scanning s character by char.
+
+    Tokens are separated by unquoted whitespace.  Quoted spans are kept
+    together with neighbouring unquoted characters as a single token, e.g.
+    foo"bar baz" → one token 'foobar baz'.  The is_quoted flag is True when
+    the token contained at least one quoted section (used so that a lone ""
+    is preserved as an empty-string argument).
+    """
+    tokens = []
+    current = []
+    current_quoted = False
+    in_quote = False
+    i = 0
+    while i < len(s):
+        ch = s[i]
+        if ch == '"' and not in_quote:
+            in_quote = True
+            current_quoted = True
+        elif ch == '"' and in_quote:
+            in_quote = False
+        elif ch == '\\' and in_quote and i + 1 < len(s) and s[i+1] in ('"', '\\'):
+            current.append(s[i+1])
+            i += 2
+            continue
+        elif ch == ' ' and not in_quote:
+            if current or current_quoted:
+                tokens.append((''.join(current), current_quoted))
+                current = []
+                current_quoted = False
+        else:
+            current.append(ch)
+        i += 1
+    if current or current_quoted:
+        tokens.append((''.join(current), current_quoted))
+    return tokens
+
+
+def _split_pipe(s):
+    """Split s on unquoted '|' characters that are NOT part of '||' or '|&'.
+
+    Returns a list of raw stage strings.
+    """
+    stages = []
+    current = []
+    in_quote = False
+    i = 0
+    while i < len(s):
+        ch = s[i]
+        if ch == '"' and not in_quote:
+            in_quote = True
+            current.append(ch)
+        elif ch == '"' and in_quote:
+            in_quote = False
+            current.append(ch)
+        elif not in_quote and ch == '|':
+            # peek ahead: || is boolean-OR (reserved), not a pipe
+            if i + 1 < len(s) and s[i + 1] == '|':
+                # keep both characters as-is
+                current.append(ch)
+                current.append(s[i + 1])
+                i += 2
+                continue
+            else:
+                stages.append(''.join(current))
+                current = []
+                i += 1
+                continue
+        else:
+            current.append(ch)
+        i += 1
+    stages.append(''.join(current))
+    return stages
+
+
+# Redirect token patterns, ordered longest-first so >> beats >
+_REDIRECT_OPS = ["&>>", "&>", "2>>", "2>", ">>", ">"]
+
+
+def _parse_redirects(raw):
+    """Strip redirect tokens from *raw* and return (clean_raw, Stage-fields).
+
+    Scans the token list produced by _tokenize_unquoted.  Any unquoted token
+    that matches a redirect operator is consumed together with the following
+    filename token.  Everything else is kept.
+
+    Returns a Stage with .raw set to the cleaned command string and all
+    redirect fields populated.
+    """
+    stage = Stage(raw)
+    tokens = _tokenize_unquoted(raw)
+    kept = []
+    i = 0
+    while i < len(tokens):
+        tok, tok_quoted = tokens[i]
+        if tok_quoted:
+            kept.append(tok)
+            i += 1
+            continue
+        matched_op = None
+        for op in _REDIRECT_OPS:
+            if tok == op:
+                matched_op = op
+                break
+        if matched_op and i + 1 < len(tokens):
+            filename, _ = tokens[i + 1]
+            if matched_op == "&>>":
+                stage.both_file   = filename
+                stage.both_append = True
+            elif matched_op == "&>":
+                stage.both_file   = filename
+                stage.both_append = False
+            elif matched_op == "2>>":
+                stage.stderr_file   = filename
+                stage.stderr_append = True
+            elif matched_op == "2>":
+                stage.stderr_file   = filename
+                stage.stderr_append = False
+            elif matched_op == ">>":
+                stage.stdout_file   = filename
+                stage.stdout_append = True
+            elif matched_op == ">":
+                stage.stdout_file   = filename
+                stage.stdout_append = False
+            i += 2
+        else:
+            # Re-quote the token if it was originally bare (no quoting needed
+            # here — we just rebuild the raw command from kept tokens).
+            kept.append(quote_arg(tok) if ' ' in tok else tok)
+            i += 1
+    stage.raw = ' '.join(kept)
+    return stage
+
+
+def parse_pipeline(segment):
+    """Parse one &&-segment into a list of Stage objects.
+
+    Each Stage has its redirect annotations extracted and its .raw set to the
+    clean command string (operators and filenames removed).
+    """
+    raw_stages = _split_pipe(segment)
+    return [_parse_redirects(r) for r in raw_stages]
 
 
 def get_os_env(env):
@@ -383,11 +554,14 @@ class Env:
             self.parent.remove(name)
 
     def update(self, name, value):
-        if self.get(name):
-            if name in self.mappings:
-                self.mappings[name] = value
-            if self.parent:
-                self.parent.update(name, value)
+        # Update the variable in whichever scope first defines it.
+        # Uses 'name in mappings' rather than self.get() so that falsy
+        # values (empty string, 0) are updated rather than creating a
+        # new local binding.
+        if name in self.mappings:
+            self.mappings[name] = value
+        elif self.parent and self.parent.get(name) is not None:
+            self.parent.update(name, value)
         else:
             self.set(name, value)
 
@@ -418,9 +592,7 @@ class StdError:
 
 class FileOutput:
     def __init__(self, filename, encoding="utf8", append=False):
-        mode = "w"
-        if append:
-            mode = "a+"
+        mode = "a+" if append else "w"
         self.out = open(filename, mode, encoding=encoding)
 
     def write(self, s):
@@ -428,6 +600,13 @@ class FileOutput:
 
     def print(self, s=""):
         print(s, file=self.out)
+
+    def close(self):
+        if self.out and not self.out.closed:
+            self.out.close()
+
+    def __del__(self):
+        self.close()
 
 
 class StringOutput:
@@ -445,6 +624,34 @@ class StringOutput:
         return self.out.getvalue()
 
 
+class StringInput:
+    """Wraps a string so internal commands can read it as line-by-line stdin."""
+    def __init__(self, data=""):
+        self._lines = data.splitlines(keepends=True)
+        self._idx = 0
+
+    def readline(self):
+        if self._idx < len(self._lines):
+            line = self._lines[self._idx]
+            self._idx += 1
+            return line
+        return ""
+
+    def readlines(self):
+        rest = self._lines[self._idx:]
+        self._idx = len(self._lines)
+        return rest
+
+    def __iter__(self):
+        return self
+
+    def __next__(self):
+        line = self.readline()
+        if line == "":
+            raise StopIteration
+        return line
+
+
 class CommandFailedException(Exception):
     pass
 
@@ -458,8 +665,6 @@ class Dabshell:
             self.outp = parent_shell.outp
             self.outs = parent_shell.outs
             self.oute = parent_shell.oute
-            self.outs_old = parent_shell.outs_old
-            self.oute_old = parent_shell.oute_old
             self.options = {}
             self.options.update(parent_shell.options)
         else:
@@ -471,8 +676,6 @@ class Dabshell:
             self.outp = StdOutput()
             self.outs = StdOutput()
             self.oute = StdError()
-            self.outs_old = None
-            self.oute_old = None
             self.options = {
                 "echo": "off",
                 "stop-on-error": "on",
@@ -508,13 +711,13 @@ class Dabshell:
             self.init_cmd(CmdBasename())
             self.init_cmd(CmdRemoveExt())
             self.init_cmd(CmdGetExt())
-            self.init_cmd(CmdRedirect())
             self.init_cmd(CmdHistory())
             self.init_cmd(CmdLHistory())
             self.init_cmd(CmdDate())
             self.init_cmd(CmdWhich())
             self.init_cmd(CmdTitle())
             self.init_cmd(CmdHelp())
+            self.init_cmd(CmdFile())
             self.init_cmd(CmdOption())
             self.init_cmd(CmdOptions())
             self.init_cmd(CmdResetTerm())
@@ -522,16 +725,22 @@ class Dabshell:
         self.history_index = -1
         self.history_current = ""
         self.local_history = {}
+        self.max_line_length = shutil.get_terminal_size().columns - 1
+        self.current_stdin = None   # set transiently during pipeline dispatch
         os.system("")
         self.inp = RawInput()
         self.line = ""
         self.index = 0
+        self._search_active = False   # True while Ctrl+R search mode is on
+        self._search_query  = ""      # characters typed so far in search
+        self._search_pos    = -1      # index into local_history list of current match
         self.info_pythonproj_cwd = None
         self.info_pythonproj_s = ""
         self.info_git_cwd = None
         self.info_git_s = ""
         self.info_venv_cwd = None
         self.info_venv_s = ""
+        self._git_executable = shutil.which("git")
         if init_shell:
             cfg = os.path.expanduser("~/.dabshell")
             if os.path.isfile(cfg):
@@ -567,8 +776,8 @@ class Dabshell:
             clean_s += " "
         result = s + f"{esc}[38;5;87m" + self.cwd + f"{esc}[0m"
         clean_result = s + self.cwd
-        if len(clean_result) > max_line_length:
-            avail = max_line_length - len(clean_s) - 3
+        if len(clean_result) > self.max_line_length:
+            avail = self.max_line_length - len(clean_s) - 3
             if avail > 0:
                 idx = len(self.cwd) - avail
                 truncated = self.cwd[idx:]
@@ -580,6 +789,8 @@ class Dabshell:
             return self.info_pythonproj_s
         self.info_pythonproj_cwd = self.cwd
         self.info_pythonproj_s = ""
+        if tomllib is None:
+            return self.info_pythonproj_s
         projfile = os.path.join(self.cwd, "pyproject.toml")
         if os.path.exists(projfile):
             with open(projfile, "rb") as infile:
@@ -593,7 +804,7 @@ class Dabshell:
         if self.info_git_cwd == self.cwd:
             return self.info_git_s
         self.info_git_cwd = self.cwd
-        self.info_git_s = "", False
+        self.info_git_s = ("", False)
         wd = self.cwd
         while not os.path.ismount(wd):
             gitdir = os.path.join(wd, ".git")
@@ -602,10 +813,10 @@ class Dabshell:
             wd = os.path.dirname(wd)
         else:
             gitdir = None
-        if gitdir:
+        if gitdir and self._git_executable:
             p = subprocess.run(
                 [
-                    shutil.which("git"),
+                    self._git_executable,
                     "status", "-s", "-b",
                 ],
                 capture_output=True,
@@ -618,7 +829,7 @@ class Dabshell:
                 else:
                     branch = lines[0][2:].strip().split(".")[0]
                 modified = lines[1:] != []
-                self.info_git_s = branch, modified
+                self.info_git_s = (branch, modified)
         return self.info_git_s
 
     def info_venv(self):
@@ -716,24 +927,207 @@ class Dabshell:
             prefix_len = len(prefix)
         return prefix, potentials
 
+    def _search_match(self, query, from_pos):
+        """Return (position, command) of the nearest match at or before from_pos.
+
+        Searches self.local_history[self.cwd] in reverse (most-recent first).
+        from_pos is an index into that list; pass -1 to start from the end.
+        Returns (pos, cmd) or (None, None) when nothing matches.
+        """
+        entries = self.local_history.get(self.cwd, [])
+        if not entries:
+            return None, None
+        if from_pos == -1 or from_pos >= len(entries):
+            from_pos = len(entries) - 1
+        for i in range(from_pos, -1, -1):
+            _, cmd = entries[i]
+            if query.lower() in cmd.lower():
+                return i, cmd
+        return None, None
+
+    def _search_redraw(self, query, match):
+        """Render the reverse-i-search prompt on the current terminal line."""
+        match_str = match if match is not None else ""
+        # Highlight the matching substring in the result
+        if match is not None and query:
+            idx = match.lower().find(query.lower())
+            if idx >= 0:
+                before = match[:idx]
+                hit    = match[idx:idx+len(query)]
+                after  = match[idx+len(query):]
+                match_str = (
+                    before
+                    + f"{esc}[1m{esc}[4m" + hit + f"{esc}[0m"
+                    + after
+                )
+        prompt = f"(reverse-i-search)`{query}': {match_str}"
+        self.outp.out.write(f"{esc}[1000D")   # move to column 0
+        self.outp.out.write(prompt)
+        self.outp.out.write(f"{esc}[0K")       # erase to end of line
+        self.outp.out.flush()
+
+    def _redraw_line(self):
+        """Write the current self.line to the terminal at the cursor position."""
+        self.outp.out.write(f"{esc}[1000D")
+        line = self.line
+        index = self.index
+        if len(line) > self.max_line_length:
+            start = index - self.max_line_length // 2
+            end = index + self.max_line_length // 2
+            if start < 0:
+                start = 0
+                end = self.max_line_length
+            elif end > len(line):
+                end = len(line)
+                start = end - self.max_line_length
+            index -= start
+            line = line[start:end]
+        self.outp.out.write(line)
+        self.outp.out.write(f"{esc}[0K")
+        if self.index < len(self.line):
+            self.outp.out.write(f"{esc}[1000D")
+            if index > 0:
+                self.outp.out.write(f"{esc}[{index}C")
+        self.outp.out.flush()
+
     def run(self):
-        global max_line_length
         self.outp.write(self.prompt() + "\n")
         tabbed = False
         while True:
-            max_line_length = shutil.get_terminal_size().columns - 1
+            self.max_line_length = shutil.get_terminal_size().columns - 1
             key = self.inp.getch()
+
+            # ── Reverse-i-search mode ────────────────────────────────────
+            if self._search_active:
+                if key == KEY_CTRL_R:
+                    # Cycle to the next older match
+                    next_pos = self._search_pos - 1 if self._search_pos > 0 else -1
+                    pos, match = self._search_match(self._search_query, next_pos)
+                    if pos is not None:
+                        self._search_pos = pos
+                    self._search_redraw(
+                        self._search_query,
+                        match if pos is not None else None,
+                    )
+                    continue
+
+                elif key == KEY_BACKSPACE:
+                    self._search_query = self._search_query[:-1]
+                    pos, match = self._search_match(
+                        self._search_query, -1
+                    )
+                    self._search_pos = pos if pos is not None else -1
+                    self._search_redraw(self._search_query, match)
+                    continue
+
+                elif key in (KEY_LF, KEY_CR):
+                    # Accept: load match into line buffer ready for editing.
+                    # Overwrite the search prompt in place — no new line needed.
+                    entries = self.local_history.get(self.cwd, [])
+                    if self._search_pos is not None and 0 <= self._search_pos < len(entries):
+                        _, matched_cmd = entries[self._search_pos]
+                    else:
+                        matched_cmd = ""
+                    self._search_active = False
+                    self._search_query  = ""
+                    self._search_pos    = -1
+                    self.line  = matched_cmd
+                    self.index = len(self.line)
+                    self._redraw_line()
+                    continue
+
+                elif key == KEY_UP:
+                    # Cycle to the next older match (same as Ctrl+R)
+                    next_pos = self._search_pos - 1 if self._search_pos > 0 else -1
+                    pos, match = self._search_match(self._search_query, next_pos)
+                    if pos is not None:
+                        self._search_pos = pos
+                    self._search_redraw(
+                        self._search_query,
+                        match if pos is not None else None,
+                    )
+                    continue
+
+                elif key == KEY_DOWN:
+                    # Cycle to the next newer match
+                    entries = self.local_history.get(self.cwd, [])
+                    if self._search_pos is not None and self._search_pos < len(entries) - 1:
+                        start = self._search_pos + 1
+                        # Search forward from start toward the newest entry
+                        match_found = None
+                        pos_found = None
+                        for i in range(start, len(entries)):
+                            _, cmd = entries[i]
+                            if self._search_query.lower() in cmd.lower():
+                                pos_found = i
+                                match_found = cmd
+                                break
+                        if pos_found is not None:
+                            self._search_pos = pos_found
+                        self._search_redraw(self._search_query, match_found)
+                    else:
+                        # Already at newest match — nothing to do
+                        entries = self.local_history.get(self.cwd, [])
+                        match = None
+                        if self._search_pos is not None and 0 <= self._search_pos < len(entries):
+                            _, match = entries[self._search_pos]
+                        self._search_redraw(self._search_query, match)
+                    continue
+
+                elif key in (KEY_ESC, KEY_CTRL_C):
+                    # Cancel: restore the line that was active before search
+                    self._search_active = False
+                    self._search_query  = ""
+                    self._search_pos    = -1
+                    self.outp.out.write(f"{esc}[1000D{esc}[0K")
+                    self.outp.out.flush()
+                    # self.line is unchanged — it held the pre-search content
+                    self.index = len(self.line)
+                    # Fall through to normal line-redraw
+
+                else:
+                    # Printable character: refine the search query
+                    if isinstance(key, str):
+                        self._search_query += key
+                        pos, match = self._search_match(self._search_query, -1)
+                        self._search_pos = pos if pos is not None else -1
+                        self._search_redraw(self._search_query, match)
+                        continue
+                    # Any other key (arrows, function keys, etc.): accept
+                    # current match, exit search, then handle key normally.
+                    entries = self.local_history.get(self.cwd, [])
+                    if self._search_pos is not None and 0 <= self._search_pos < len(entries):
+                        _, matched_cmd = entries[self._search_pos]
+                    else:
+                        matched_cmd = self.line  # nothing found — keep current
+                    self._search_active = False
+                    self._search_query  = ""
+                    self._search_pos    = -1
+                    self.outp.out.write(f"{esc}[1000D{esc}[0K")
+                    self.outp.out.flush()
+                    self.line  = matched_cmd
+                    self.index = len(self.line)
+                    # Do NOT continue — fall through so the key is processed
+
+            # ── Normal editing mode ──────────────────────────────────────
+            if key == KEY_CTRL_R:
+                # Enter search mode, saving whatever is in the line buffer
+                self._search_active = True
+                self._search_query  = ""
+                self._search_pos    = -1
+                self._search_redraw("", None)
+                continue
 
             if key == KEY_TAB:
                 cmd = None
+                rest = ""
                 if self.line.strip() and self.index == len(self.line):
                     cmd, args = split_command(
                         self.line,
                         self,
                         with_vars=False,
                     )
-                    rest = ""
-                elif self.line.strip() and self.line[self.index] == " ":
+                elif self.line.strip() and self.index < len(self.line) and self.line[self.index] == " ":
                     rest = self.line[self.index:]
                     cmd, args = split_command(
                         self.line[:self.index],
@@ -759,8 +1153,8 @@ class Dabshell:
                                 os.path.basename(p)
                                 for p in potentials
                             ])
-                            if len(s) > max_line_length - 1:
-                                s = s[:max_line_length-4] + "..."
+                            if len(s) > self.max_line_length - 1:
+                                s = s[:self.max_line_length-4] + "..."
                             self.outp.print(s)
                         tabbed = False
                     else:
@@ -873,36 +1267,13 @@ class Dabshell:
                     self.index = new_idx
                 else:
                     self.index = len(self.line)
-            elif type(key) == str:
+            elif isinstance(key, str):
                 pre = self.line[:self.index]
                 post = self.line[self.index:]
                 self.line = pre + key + post
                 self.index += 1
 
-            # Move all the way left
-            self.outp.out.write(f"{esc}[1000D")
-            line = self.line
-            index = self.index
-            if len(line) > max_line_length:
-                start = index - max_line_length // 2
-                end = index + max_line_length // 2
-                if start < 0:
-                    start = 0
-                    end = max_line_length
-                elif end > len(line):
-                    end = len(line)
-                    start = end - max_line_length
-                index -= start
-                line = line[start:end]
-            self.outp.out.write(line)
-            self.outp.out.write(f"{esc}[0K")
-            if self.index < len(self.line):
-                # Move all the way left
-                self.outp.out.write(f"{esc}[1000D")
-                if index > 0:
-                    # Move cursor to index
-                    self.outp.out.write(f"{esc}[{index}C")
-            self.outp.out.flush()
+            self._redraw_line()
 
     def load_history(self):
         self.history = []
@@ -911,16 +1282,18 @@ class Dabshell:
         self.local_history = {}
         fname = os.path.expanduser("~/.dabshell-history")
         if os.path.isfile(fname):
+            entries = []
             with open(fname, encoding="utf8") as infile:
-                entries = []
-                while True:
-                    path = infile.readline()
-                    if not path:
-                        break
-                    command = infile.readline()
-                    if not command:
-                        break
-                    entries.append((path.strip(), command.strip()))
+                for raw in infile:
+                    raw = raw.strip()
+                    if not raw:
+                        continue
+                    try:
+                        rec = raw.split("\t", 1)
+                        if len(rec) == 2:
+                            entries.append((rec[0], rec[1]))
+                    except Exception:
+                        pass
             if len(entries) > 1000:
                 # compress older entries
                 idx = len(entries) - 1000
@@ -931,8 +1304,10 @@ class Dabshell:
                 # write compressed entries to file
                 with open(fname, "w", encoding="utf8") as outfile:
                     for path, command in entries:
-                        print(path, file=outfile)
-                        print(command, file=outfile)
+                        outfile.write(
+                            path.replace("\t", " ") + "\t"
+                            + command.replace("\n", " ") + "\n"
+                        )
             for idx, entry in enumerate(entries):
                 path, command = entry
                 self.history.append(command)
@@ -943,8 +1318,10 @@ class Dabshell:
     def append_history(self, path, command):
         fname = os.path.expanduser("~/.dabshell-history")
         with open(fname, "a+", encoding="utf8") as outfile:
-            print(path, file=outfile)
-            print(command, file=outfile)
+            # Use tab-separated path/command; strip embedded tabs/newlines
+            safe_path = path.replace("\t", " ")
+            safe_cmd = command.replace("\n", " ")
+            outfile.write(safe_path + "\t" + safe_cmd + "\n")
 
     def execute(self, line, history=True):
         line = line.strip()
@@ -969,30 +1346,253 @@ class Dabshell:
         self.info_pythonproj_cwd = None
         self.info_git_cwd = None
         self.info_venv_cwd = None
-        cmds = line.split(" && ")  # TODO only split if && is not in quoted arg
-        for cmd_args in cmds:
-            cmd, args = split_command(cmd_args, self)
-            try:
-                cmd_ = self.env.get(cmd)
-                if isinstance(cmd_, CmdAliasDefinition):
-                    cmd, args = split_command(
-                        cmd_.value + " " + quote_args(args),
-                        self,
-                    )
-                    cmd_ = self.env.get(cmd)
-                if cmd_ and isinstance(cmd_, Cmd):
-                    cmd_.execute(self, args)
-                elif cmd == "exit":
-                    return False
-                elif cmd.endswith(".dsh"):
-                    self.env.get("script").execute(self, [cmd, *args])
+        # Split on && only when not inside a quoted argument
+        def split_and_and(line):
+            parts = []
+            current = ""
+            in_quote = False
+            i = 0
+            while i < len(line):
+                ch = line[i]
+                if ch == '"' and not in_quote:
+                    in_quote = True
+                    current += ch
+                elif ch == '"' and in_quote:
+                    in_quote = False
+                    current += ch
+                elif (
+                    not in_quote
+                    and ch == "&"
+                    and i + 1 < len(line)
+                    and line[i + 1] == "&"
+                ):
+                    parts.append(current)
+                    current = ""
+                    i += 2
+                    # skip optional surrounding spaces
+                    while i < len(line) and line[i] == " ":
+                        i += 1
+                    continue
                 else:
-                    self.env.get("run").execute(self, [cmd, *args])
-                    if IS_WIN and history:
-                        os.system("title " + self.title)
+                    current += ch
+                i += 1
+            parts.append(current)
+            return parts
+
+        cmds = split_and_and(line)
+        for cmd_segment in cmds:
+            # Handle 'exit' before pipeline parsing so it returns False cleanly
+            if cmd_segment.strip() == "exit":
+                return False
+            stages = parse_pipeline(cmd_segment)
+            try:
+                self.execute_pipeline(stages, history=history)
+            except CommandFailedException:
+                if self.option_set("stop-on-error"):
+                    raise
             except KeyboardInterrupt:
                 pass
         return True
+
+    # ------------------------------------------------------------------
+    # Pipeline execution
+    # ------------------------------------------------------------------
+
+    def execute_pipeline(self, stages, history=True):
+        """Execute a list of Stage objects connected by pipes.
+
+        Strategy:
+        - Single stage: run directly against the shell's current outs/oute.
+        - Multi-stage:  run all but the last stage with stdout captured into a
+          StringOutput (internal) or a PIPE (external-only fast path when both
+          adjacent stages are external), then feed the captured bytes/string as
+          stdin to the next stage.  The last stage writes to the shell's real
+          outs/oute, subject to any redirects on that stage.
+        """
+        if len(stages) == 1:
+            self._run_stage(stages[0], stdin_data=None, history=history)
+            return
+
+        stdin_data = None   # str fed into the next stage
+        for i, stage in enumerate(stages):
+            is_last = (i == len(stages) - 1)
+            if is_last:
+                self._run_stage(stage, stdin_data=stdin_data, history=history)
+            else:
+                # Capture this stage's stdout into a string
+                captured = StringOutput()
+                saved_outs = self.outs
+                self.outs = captured
+                try:
+                    self._run_stage(
+                        stage, stdin_data=stdin_data, history=history,
+                        # Ignore stop-on-error for intermediate stages so the
+                        # pipe keeps flowing; errors still go to oute.
+                        ignore_stop_on_error=True,
+                    )
+                except CommandFailedException:
+                    pass
+                finally:
+                    self.outs = saved_outs
+                stdin_data = captured.value()
+
+    def _resolve_stage_outputs(self, stage):
+        """Return (outs, oute, files_to_close) for the given Stage redirects.
+
+        Opens any required FileOutput objects and returns the output objects to
+        use for this stage, plus a list of FileOutput objects to close when done.
+        """
+        outs = self.outs
+        oute = self.oute
+        to_close = []
+
+        if stage.both_file is not None:
+            path = stage.both_file
+            if not os.path.isabs(path):
+                path = os.path.join(self.cwd, path)
+            fo = FileOutput(path, append=stage.both_append)
+            to_close.append(fo)
+            outs = fo
+            oute = fo
+        else:
+            if stage.stdout_file is not None:
+                path = stage.stdout_file
+                if not os.path.isabs(path):
+                    path = os.path.join(self.cwd, path)
+                fo = FileOutput(path, append=stage.stdout_append)
+                to_close.append(fo)
+                outs = fo
+            if stage.stderr_file is not None:
+                path = stage.stderr_file
+                if not os.path.isabs(path):
+                    path = os.path.join(self.cwd, path)
+                fo = FileOutput(path, append=stage.stderr_append)
+                to_close.append(fo)
+                oute = fo
+
+        return outs, oute, to_close
+
+    def _run_stage(self, stage, stdin_data, history, ignore_stop_on_error=False):
+        """Execute one Stage, applying its redirects and routing stdin_data."""
+        outs, oute, to_close = self._resolve_stage_outputs(stage)
+        saved_outs, saved_oute = self.outs, self.oute
+        self.outs = outs
+        self.oute = oute
+        try:
+            self._dispatch_stage(stage, stdin_data, history)
+        except CommandFailedException:
+            if not ignore_stop_on_error and self.option_set("stop-on-error"):
+                raise
+        finally:
+            self.outs = saved_outs
+            self.oute = saved_oute
+            for fo in to_close:
+                fo.close()
+
+    def _dispatch_stage(self, stage, stdin_data, history):
+        """Resolve aliases and dispatch a single stage to the right handler."""
+        if not stage.raw:
+            return
+        cmd, args = split_command(stage.raw, self)
+        if not cmd:
+            return
+
+        # Expand aliases
+        cmd_ = self.env.get(cmd)
+        if isinstance(cmd_, CmdAliasDefinition):
+            cmd, args = split_command(
+                cmd_.value + " " + quote_args(args), self,
+            )
+            cmd_ = self.env.get(cmd)
+
+        if cmd_ and isinstance(cmd_, Cmd):
+            # Internal command — pass stdin_data via shell.current_stdin
+            self.current_stdin = (
+                StringInput(stdin_data) if stdin_data is not None else None
+            )
+            try:
+                cmd_.execute(self, args)
+            finally:
+                self.current_stdin = None
+        elif cmd == "exit":
+            # Handled at a higher level; returning False from execute() exits.
+            # Inside a pipeline we just treat it as a no-op to keep things
+            # simple — exit in a pipe is a degenerate case.
+            pass
+        elif cmd.endswith(".dsh"):
+            self.current_stdin = (
+                StringInput(stdin_data) if stdin_data is not None else None
+            )
+            try:
+                self.env.get("script").execute(self, [cmd, *args])
+            finally:
+                self.current_stdin = None
+        else:
+            self._run_external(cmd, args, stdin_data, history)
+
+    def _run_external(self, cmd, args, stdin_data, history):
+        """Run an external process, wiring stdin/stdout/stderr correctly.
+
+        - stdin_data: str or None.  When not None, it is passed to the process
+          as its standard input.
+        - stdout/stderr are routed to the current shell.outs/oute.
+          If those are StringOutput or FileOutput we capture/pipe; if they are
+          StdOutput/StdError we pass the underlying file object directly so that
+          the process output streams straight to the terminal without buffering.
+        """
+        try:
+            executable = self.canon(find_executable(self.cwd, cmd))
+            if executable is None:
+                self.oute.print(f"ERR: {cmd} not found")
+                raise CommandFailedException()
+            if executable.endswith(".dsh"):
+                self.current_stdin = (
+                    StringInput(stdin_data) if stdin_data is not None else None
+                )
+                try:
+                    self.env.get("script").execute(self, [executable, *args])
+                finally:
+                    self.current_stdin = None
+                return
+
+            stdin_bytes = (
+                stdin_data.encode("utf-8") if stdin_data is not None else None
+            )
+
+            # Determine whether we can hand the OS file handle directly to
+            # the subprocess (fast path) or must capture (StringOutput /
+            # FileOutput without a raw OS handle, or stdin_data present).
+            outs_direct = isinstance(self.outs, (StdOutput, FileOutput))
+            oute_direct = isinstance(self.oute, (StdError, StdOutput, FileOutput))
+            use_capture = (not outs_direct) or (not oute_direct)
+
+            if use_capture:
+                p = subprocess.run(
+                    [executable, *args],
+                    cwd=self.cwd,
+                    env=get_os_env(self.env),
+                    input=stdin_bytes,
+                    capture_output=True,
+                )
+                self.outs.write(p.stdout.decode("utf-8", errors="replace"))
+                self.oute.write(p.stderr.decode("utf-8", errors="replace"))
+            else:
+                p = subprocess.run(
+                    [executable, *args],
+                    cwd=self.cwd,
+                    env=get_os_env(self.env),
+                    input=stdin_bytes,
+                    stdout=self.outs.out,
+                    stderr=self.oute.out,
+                )
+            if p.returncode != 0:
+                raise CommandFailedException()
+            if IS_WIN and history:
+                os.system("title " + self.title)
+        except CommandFailedException:
+            raise
+        except Exception as e:
+            self.oute.print(str(e))
 
 
 class Cmd:
@@ -1047,11 +1647,13 @@ class CmdAlias(Cmd):
                 alias = shell.env.get(name)
                 if isinstance(alias, CmdAliasDefinition):
                     shell.outs.print(f"{alias.name} = {alias.value}")
-            elif name in shell.env.names():
-                shell.oute.print(f"{name} already used")
             else:
-                alias = CmdAliasDefinition(name, value)
-                shell.env.set(name, alias)
+                existing = shell.env.get(name)
+                if isinstance(existing, Cmd) and not isinstance(existing, CmdAliasDefinition):
+                    shell.oute.print(f"ERR: {name} is a builtin command and cannot be aliased")
+                else:
+                    alias = CmdAliasDefinition(name, value)
+                    shell.env.set(name, alias)
 
 
 class CmdOptions(Cmd):
@@ -1089,7 +1691,7 @@ class CmdOption(Cmd):
 
 class CmdRun(Cmd):
     def __init__(self):
-         Cmd.__init__(self, "run")
+        Cmd.__init__(self, "run")
 
     def help(self):
         return "<cmd> [<arg>...]   : runs the external command"
@@ -1097,44 +1699,10 @@ class CmdRun(Cmd):
     def execute(self, shell, args):
         cmd = args[0]
         args = args[1:]
-        try:
-            executable = shell.canon(find_executable(shell.cwd, cmd))
-            if executable is None:
-                shell.oute.print(f"ERR: {cmd} not found")
-                raise CommandFailedException()
-            elif executable.endswith(".dsh"):
-                shell.env.get("script").execute(shell, [executable, *args])
-            elif isinstance(shell.outs, StringOutput):
-                p = subprocess.run(
-                    [
-                        executable,
-                        *args,
-                    ],
-                    cwd=shell.cwd,
-                    env=get_os_env(shell.env),
-                    capture_output=True,
-                )
-                shell.outs.write(p.stdout.decode("utf8"))
-                shell.oute.write(p.stderr.decode("utf8"))
-                if p.returncode != 0:
-                    raise CommandFailedException()
-            else:
-                p = subprocess.run(
-                    [
-                        executable,
-                        *args,
-                    ],
-                    cwd=shell.cwd,
-                    env=get_os_env(shell.env),
-                    stdout=shell.outs.out,
-                    stderr=shell.oute.out,
-                )
-                if p.returncode != 0:
-                    raise CommandFailedException()
-        except CommandFailedException:
-            raise
-        except Exception as e:
-            shell.oute.print(e)
+        stdin_data = None
+        if shell.current_stdin is not None:
+            stdin_data = "".join(shell.current_stdin.readlines())
+        shell._run_external(cmd, args, stdin_data, history=True)
 
 
 def evaluate_expression(expr, shell):
@@ -1228,7 +1796,7 @@ def evaluate_expression(expr, shell):
                 return "yes"
             else:
                 return ""
-        elif pred == "not-is-dir" or "is-not-dir":
+        elif pred in ("not-is-dir", "is-not-dir"):
             if not os.path.isabs(value):
                 value = os.path.join(shell.cwd, value)
             if os.path.isdir(value):
@@ -1236,13 +1804,13 @@ def evaluate_expression(expr, shell):
             else:
                 return "yes"
         elif pred == "has-extension":
-            base, ext = os.path.splitext()
+            base, ext = os.path.splitext(value)
             if ext == value:
                 return "yes"
             else:
                 return ""
-        elif pred == "not-has-extension" or pred == "has-not-extension":
-            base, ext = os.path.splitext()
+        elif pred in ("not-has-extension", "has-not-extension"):
+            base, ext = os.path.splitext(value)
             if ext == value:
                 return ""
             else:
@@ -1305,7 +1873,6 @@ class CmdScript(Cmd):
                 self.execute_lines(scriptshell, infile.readlines())
             except KeyboardInterrupt:
                 pass
-        CmdRedirect().execute(shell, ["off"])
 
     def execute_lines(self, shell, lines):
         lines = [line.strip() for line in lines]
@@ -1549,15 +2116,19 @@ class CmdLs(Cmd):
         entry = {
             "name": os.path.basename(path),
             "path": path,
+            "timestamp": "",
+            "size": 0,
         }
-        if opts:
-            s = os.stat(path)
+        try:
+            s = os.lstat(path)
             t = time.gmtime(s.st_mtime)
             entry["timestamp"] = (
                 f"{t.tm_year}-{t.tm_mon:02}-{t.tm_mday:02} "
                 f"{t.tm_hour:02}:{t.tm_min:02}:{t.tm_sec:02}"
             )
             entry["size"] = s.st_size
+        except OSError:
+            pass  # broken symlink or race condition; leave defaults
         return entry
 
     def ls(self, shell, path, opts):
@@ -1569,7 +2140,10 @@ class CmdLs(Cmd):
         elif os.path.isfile(path):
             entries.append(self.get_entry(shell, path, opts))
         else:
-            shell.oute.print(f"ERR: {path} is not a directory")
+            if not os.path.exists(path):
+                shell.oute.print(f"ERR: {path} not found")
+            else:
+                shell.oute.print(f"ERR: {path} is not a directory")
 
         if "t" in opts:
             if "r" in opts:
@@ -1613,7 +2187,7 @@ class CmdCd(Cmd):
 
     def execute(self, shell, args):
         if len(args) == 0:
-            shell.cwd = shell.canon(".")
+            shell.cwd = shell.canon(os.path.expanduser("~"))
         else:
             path = args[0]
             if os.path.isabs(path):
@@ -1645,9 +2219,12 @@ class CmdSet(Cmd):
         return "<name> <value>   : sets a variable"
 
     def execute(self, shell, args):
+        if len(args) < 2:
+            shell.oute.print("ERR: set requires a name and a value")
+            return
         name = args[0]
         if args[1] == "exec":
-            value = exec(quote_args(args[2:]), shell)
+            value = shell_exec(quote_args(args[2:]), shell)
         elif args[1] == "eval":
             value = evaluate_expression(quote_args(args[2:]), shell)
         else:
@@ -1683,6 +2260,11 @@ class CmdCat(Cmd):
         return "[<file> ...]   : prints the contents of the files"
 
     def execute(self, shell, args):
+        # If no files given and we have piped stdin, pass it through
+        if not args and shell.current_stdin is not None:
+            for line in shell.current_stdin:
+                shell.outs.write(line)
+            return
         files = []
         for filename in args:
             if not os.path.isabs(filename):
@@ -1696,6 +2278,9 @@ class CmdCat(Cmd):
         for filename in files:
             if not os.path.exists(filename):
                 shell.oute.print(f"ERR: {filename} not found")
+                continue
+            if os.path.isdir(filename):
+                shell.oute.print(f"ERR: {filename}: is a directory")
                 continue
             with open(
                 filename,
@@ -1737,6 +2322,9 @@ class CmdDiff(Cmd):
                     files.append(file)
             else:
                 files.append(filename)
+        if len(files) < 2:
+            shell.oute.print("ERR: diff requires two files")
+            return
         cwd = shell.canon(shell.cwd)
         file1 = files[0]
         file2 = files[1]
@@ -1800,12 +2388,20 @@ class CmdWc(Cmd):
                     files.append(file)
             else:
                 files.append(filename)
+        # If no files given and we have piped stdin, count that instead
+        if not files and shell.current_stdin is not None:
+            count = sum(1 for _ in shell.current_stdin)
+            shell.outs.print(f"(stdin) {count}")
+            return
         cwd = shell.canon(shell.cwd)
         total = 0
+        counted = 0
         for filename in files:
             if not os.path.exists(filename):
                 shell.oute.print(f"ERR: {filename} not found")
                 continue
+            if os.path.isdir(filename):
+                continue  # silently skip directories
             fname = filename
             if fname.startswith(cwd):
                 fname = fname[len(cwd)+1:]
@@ -1814,7 +2410,8 @@ class CmdWc(Cmd):
                 count = len(lines)
                 shell.outs.print(f"{fname} {count}")
                 total += count
-        if len(files) > 1:
+                counted += 1
+        if counted > 1:
             shell.outs.print(f"Total {total}")
 
 
@@ -1845,7 +2442,7 @@ class CmdTail(Cmd):
                     n = int(args[idx+1])
                     idx += 1
                 elif arg.startswith("--lines="):
-                    n = int(arg[len("--lines=")])
+                    n = int(arg[len("--lines="):])
             else:
                 filenames.append(arg)
             idx += 1
@@ -1860,10 +2457,18 @@ class CmdTail(Cmd):
                     files.append(file)
             else:
                 files.append(filename)
+        # If no files and we have piped stdin, buffer and tail it
+        if not files and shell.current_stdin is not None:
+            lines = list(shell.current_stdin)
+            for line in lines[-n:]:
+                shell.outs.write(line)
+            return
         for filename in files:
             if not os.path.exists(filename):
                 shell.oute.print(f"ERR: {filename} not found")
                 continue
+            if os.path.isdir(filename):
+                continue  # silently skip directories
             with open(filename, "rb") as infile:
                 # TODO for now, we read everything, later, optimize
                 lines = infile.readlines()
@@ -1933,7 +2538,7 @@ class CmdHead(Cmd):
                     n = int(args[idx+1])
                     idx += 1
                 elif arg.startswith("--lines="):
-                    n = int(arg[len("--lines=")])
+                    n = int(arg[len("--lines="):])
             else:
                 filenames.append(arg)
             idx += 1
@@ -1948,10 +2553,22 @@ class CmdHead(Cmd):
                     files.append(file)
             else:
                 files.append(filename)
+        # If no files and we have piped stdin, read from it
+        if not files and shell.current_stdin is not None:
+            encoding = "utf8"
+            for i in range(n):
+                line = shell.current_stdin.readline()
+                if not line:
+                    break
+                shell.outs.write(line)
+            return
         for filename in files:
             if not os.path.exists(filename):
                 shell.oute.print(f"ERR: {filename} not found")
-                pass
+                continue
+            if os.path.isdir(filename):
+                shell.oute.print(f"ERR: {filename}: is a directory")
+                continue
             with open(filename, "rb") as infile:
                 encoding = "utf8"
                 for i in range(n):
@@ -2001,6 +2618,9 @@ class CmdCp(Cmd):
         return "<srcfiles>... <dest> : copies one or multiple files"
 
     def execute(self, shell, args):
+        if len(args) < 2:
+            shell.oute.print("ERR: cp requires at least two arguments")
+            return
         sources = args[:-1]
         dest = args[-1]
         if not os.path.isabs(dest):
@@ -2040,6 +2660,9 @@ class CmdMv(Cmd):
         return "<src>... <dest> : moves one or multiple files or dirs"
 
     def execute(self, shell, args):
+        if len(args) < 2:
+            shell.oute.print("ERR: mv requires at least two arguments")
+            return
         sources = args[:-1]
         dest = args[-1]
         if not os.path.isabs(dest):
@@ -2114,19 +2737,19 @@ class CmdTree(Cmd):
                                 flt.startswith("*") and
                                 fname.endswith(flt[1:])
                             ):
-                                print(path_)
+                                shell.outs.print(path_)
                                 break
                             elif (
                                 flt.endswith("*") and
                                 fname.startswith(flt[:-1])
                             ):
-                                print(path_)
+                                shell.outs.print(path_)
                                 break
                             elif flt == fname:
-                                print(path_)
+                                shell.outs.print(path_)
                                 break
                     else:
-                        print(path_)
+                        shell.outs.print(path_)
             except KeyboardInterrupt:
                 pass
 
@@ -2151,25 +2774,24 @@ class CmdTouch(Cmd):
         return "<filename>... : creates/changes the files"
 
     def execute(self, shell, args):
-        files = []
+        paths = []
         for path in args:
             if not os.path.isabs(path):
                 path = os.path.join(shell.cwd, path)
-            allfiles = glob.glob(path)
-            if allfiles:
-                for file in allfiles:
-                    files.append(file)
+            matched = glob.glob(path)
+            if matched:
+                paths.extend(matched)
             else:
-                files.append(path)
-        for path in files:
-            if not os.path.isfile(path):
-                shell.oute.print(f"ERR: {path} is not a file")
+                # No match: treat as a new file to create
+                paths.append(path)
+        for path in paths:
+            if os.path.isdir(path):
+                shell.oute.print(f"ERR: {path}: is a directory")
                 continue
             try:
-                print(path)
-                try:
+                if os.path.exists(path):
                     os.utime(path)
-                except OSError:
+                else:
                     open(path, "a").close()
             except Exception as e:
                 shell.oute.print(str(e))
@@ -2189,7 +2811,11 @@ class CmdRm(Cmd):
             if not os.path.isabs(path):
                 path = os.path.join(shell.cwd, path)
             for path in glob.glob(path):
+                if os.path.isdir(path):
+                    shell.oute.print(f"ERR: {path}: is a directory")
+                    continue
                 if not os.path.isfile(path):
+                    shell.oute.print(f"ERR: {path} not found")
                     continue
                 try:
                     os.remove(path)
@@ -2296,58 +2922,6 @@ class CmdRemoveExt(Cmd):
         shell.outs.print(os.path.splitext(args[0])[0])
 
 
-class CmdRedirect(Cmd):
-    def __init__(self):
-        Cmd.__init__(self, "redirect")
-
-    def help(self):
-        return (
-            "out|err|all|off [filename [--append]]: "
-            "enable/disable output redirection"
-        )
-
-    def execute(self, shell, args):
-        if args[0] == "off":
-            if not isinstance(shell.outs, StdOutput):
-                shell.outs.out.close()
-                if shell.outs_old:
-                    shell.outs = shell.outs_old
-                    shell.outs_old = None
-                else:
-                    shell.oupt = StdOutput()
-            if not isinstance(shell.oute, StdError):
-                shell.oute.out.close()
-                if shell.oute_old:
-                    shell.oute = shell.oute_old
-                    shell.oute_old = None
-                else:
-                    shell.oute = StdError()
-        else:
-            out = FileOutput(
-                args[1],
-                encoding="utf8",
-                append="--append" in args,
-            )
-            # We set the new output, but retain the old one
-            # in the out*_old variable. But we do this only
-            # once. That means, that if we redirect twice,
-            # we retain the original output and close the
-            # first redirected output before installing the
-            # second one.
-            if args[0] == "out" or args[0] == "all":
-                if not shell.outs_old:
-                    shell.outs_old = shell.outs
-                elif isinstance(shell.outs, FileOutput):
-                    shell.outs.out.close()
-                shell.outs = out
-            if args[0] == "err" or args[0] == "all":
-                if not shell.oute_old:
-                    shell.oute_old = shell.oute
-                elif isinstance(shell.oute, FileOutput):
-                    shell.oute.out.close()
-                shell.oute = out
-
-
 class CmdHistory(Cmd):
     def __init__(self):
         Cmd.__init__(self, "history")
@@ -2415,7 +2989,7 @@ class CmdWhich(Cmd):
         for arg in args:
             cmd = shell.env.get(arg)
             if cmd and isinstance(cmd, Cmd):
-                print("(internal command)")
+                shell.outs.print(f"{arg}: internal command")
             location = find_executable(shell.cwd, arg)
             if location:
                 shell.outs.print(shell.canon(location))
@@ -2446,8 +3020,28 @@ class CmdGrep(Cmd):
             else:
                 args_.append(arg)
         pattern = args_[0]
-        locations = []
         locations = args_[1:]
+        # If no locations given and we have piped stdin, grep that instead
+        if not locations and shell.current_stdin is not None:
+            try:
+                for linenr, line in enumerate(shell.current_stdin, 1):
+                    line_stripped = line.rstrip("\n").rstrip("\r")
+                    if self.case_sensitive:
+                        match = re.match(f".*({pattern})", line_stripped)
+                    else:
+                        match = re.match(
+                            f".*({pattern.lower()})", line_stripped.lower()
+                        )
+                    if self.invert:
+                        match = not match
+                    if match:
+                        if self.quiet:
+                            shell.outs.print(line_stripped)
+                        else:
+                            shell.outs.print(f"{linenr}: {line_stripped}")
+            except KeyboardInterrupt:
+                pass
+            return
         if not locations:
             locations = ["."]
         try:
@@ -2611,6 +3205,455 @@ class CmdHelp(Cmd):
             if obj and isinstance(obj, Cmd):
                 shell.outs.print(f"{obj.name} {obj.help()}")
 
+class CmdFile(Cmd):
+    def __init__(self):
+        Cmd.__init__(self, "file")
+
+    def help(self):
+        return "<file>...   : detect and describe the type of each file"
+
+    # ── extension → label ────────────────────────────────────────────────
+    _EXT = {
+        # Python
+        ".py": "Python source", ".pyi": "Python stub",
+        # JavaScript / TypeScript
+        ".js": "JavaScript source", ".mjs": "JavaScript source",
+        ".cjs": "JavaScript source",
+        ".ts": "TypeScript source", ".tsx": "TypeScript source",
+        ".jsx": "React/JSX source",
+        # JVM
+        ".java": "Java source", ".kt": "Kotlin source",
+        ".kts": "Kotlin script", ".scala": "Scala source",
+        # C family
+        ".c": "C source", ".h": "C header",
+        ".cpp": "C++ source", ".cc": "C++ source",
+        ".cxx": "C++ source", ".hpp": "C++ header",
+        ".cs": "C# source",
+        # Systems
+        ".go": "Go source", ".rs": "Rust source",
+        ".swift": "Swift source",
+        # Dynamic / scripting
+        ".rb": "Ruby source", ".php": "PHP source",
+        ".lua": "Lua source", ".pl": "Perl source", ".pm": "Perl module",
+        ".r": "R source", ".R": "R source",
+        ".jl": "Julia source",
+        # Functional
+        ".hs": "Haskell source", ".lhs": "Haskell literate source",
+        ".ml": "OCaml source", ".mli": "OCaml interface",
+        ".fs": "F# source", ".fsi": "F# interface", ".fsx": "F# script",
+        ".clj": "Clojure source", ".cljs": "ClojureScript source",
+        ".ex": "Elixir source", ".exs": "Elixir script",
+        ".erl": "Erlang source", ".hrl": "Erlang header",
+        ".scm": "Scheme source", ".sld": "Scheme library definition",
+        ".lsp": "Common Lisp source", ".lisp": "Common Lisp source",
+        # Shell
+        ".sh": "Shell script", ".bash": "Bash script",
+        ".zsh": "Zsh script", ".fish": "Fish script",
+        ".bat": "Windows batch script", ".cmd": "Windows batch script",
+        ".ps1": "PowerShell script", ".psm1": "PowerShell module",
+        ".dsh": "dabshell script",
+        # Web / markup
+        ".html": "HTML document", ".htm": "HTML document",
+        ".css": "CSS stylesheet",
+        ".scss": "SCSS stylesheet", ".sass": "Sass stylesheet",
+        ".less": "Less stylesheet",
+        ".xml": "XML document", ".xsd": "XML schema",
+        ".xsl": "XML stylesheet", ".xslt": "XML stylesheet",
+        ".svg": "SVG image",
+        # Data
+        ".json": "JSON data", ".jsonl": "JSON Lines data",
+        ".ndjson": "JSON Lines data",
+        ".yaml": "YAML data", ".yml": "YAML data",
+        ".toml": "TOML config",
+        ".ini": "INI config", ".cfg": "config file", ".conf": "config file",
+        ".env": "environment file",
+        ".csv": "CSV data", ".tsv": "TSV data",
+        ".sql": "SQL script",
+        ".graphql": "GraphQL document", ".gql": "GraphQL document",
+        ".proto": "Protocol Buffers definition",
+        # Infrastructure / build
+        ".tf": "Terraform config", ".tfvars": "Terraform variables",
+        ".nix": "Nix expression",
+        ".vim": "Vim script", ".el": "Emacs Lisp",
+        # Docs
+        ".md": "Markdown document", ".markdown": "Markdown document",
+        ".rst": "reStructuredText document",
+        ".tex": "LaTeX document",
+        ".po": "Gettext translation", ".pot": "Gettext template",
+        # Misc text
+        ".diff": "diff file", ".patch": "patch file",
+        ".log": "log file", ".txt": "plain text",
+        # Certs / keys
+        ".pem": "PEM data", ".crt": "certificate",
+        ".cer": "certificate", ".key": "private key",
+    }
+
+    # ── magic signatures: (offset, bytes, label) ─────────────────────────
+    # Checked in order; first match wins.
+    _MAGIC = [
+        (0,   b"\x7fELF",              "ELF executable"),
+        (0,   b"MZ",                   "PE executable (Windows)"),
+        (0,   b"\xcf\xfa\xed\xfe",    "Mach-O 64-bit binary"),
+        (0,   b"\xce\xfa\xed\xfe",    "Mach-O 32-bit binary"),
+        (0,   b"\xca\xfe\xba\xbe",    "Java class file"),
+        (0,   b"\x00asm",             "WebAssembly binary"),
+        (0,   b"%PDF-",               "PDF document"),
+        (0,   b"PK\x03\x04",          "ZIP archive"),
+        (0,   b"\x1f\x8b",            "GZIP compressed data"),
+        (0,   b"BZh",                  "BZIP2 compressed data"),
+        (0,   b"\xfd7zXZ\x00",        "XZ compressed data"),
+        (0,   b"7z\xbc\xaf\x27\x1c", "7-Zip archive"),
+        (0,   b"Rar!\x1a\x07",        "RAR archive"),
+        (0,   b"\x89PNG\r\n\x1a\n",  "PNG image"),
+        (0,   b"\xff\xd8\xff",        "JPEG image"),
+        (0,   b"GIF87a",              "GIF image"),
+        (0,   b"GIF89a",              "GIF image"),
+        (0,   b"BM",                   "BMP image"),
+        (0,   b"fLaC",                "FLAC audio"),
+        (0,   b"OggS",                "OGG container"),
+        (0,   b"ID3",                  "MP3 audio"),
+        (0,   b"\xff\xfb",            "MP3 audio"),
+        (0,   b"\x1a\x45\xdf\xa3",   "Matroska/WebM container"),
+        (0,   b"PAR1",                "Parquet columnar data"),
+        (0,   b"SQLite format 3\x00", "SQLite database"),
+        (0,   b"\xd0\xcf\x11\xe0",   "OLE2 compound document (legacy Office)"),
+        # WAV / AVI / WEBP share RIFF header — disambiguate by bytes 8-12
+        (0,   b"RIFF",                None),   # handled specially below
+        # TAR ustar at offset 257
+        (257, b"ustar",               "TAR archive"),
+        # MP4/MOV ftyp at offset 4
+        (4,   b"ftyp",                "MPEG-4 container"),
+        # BOM markers (text)
+        (0,   b"\xef\xbb\xbf",       "UTF-8 BOM text"),
+        (0,   b"\xff\xfe",            "UTF-16 LE text"),
+        (0,   b"\xfe\xff",            "UTF-16 BE text"),
+    ]
+
+    def execute(self, shell, args):
+        if not args:
+            shell.oute.print("ERR: file requires at least one argument")
+            return
+        paths = []
+        for arg in args:
+            if not os.path.isabs(arg):
+                arg = os.path.join(shell.cwd, arg)
+            matched = sorted(glob.glob(arg))
+            paths.extend(matched if matched else [arg])
+        for path in paths:
+            label = os.path.basename(path)
+            result = self._describe(path)
+            shell.outs.print(f"{label}: {result}")
+
+    def _describe(self, path):
+        if not os.path.exists(path):
+            return "ERROR: no such file or directory"
+        if os.path.isdir(path):
+            return "directory"
+        if os.path.islink(path):
+            target = os.readlink(path)
+            return f"symbolic link to {target}"
+
+        try:
+            size = os.path.getsize(path)
+        except OSError:
+            return "ERROR: cannot stat file"
+
+        if size == 0:
+            return "empty file"
+
+        # Read a header chunk for magic detection
+        try:
+            with open(path, "rb") as f:
+                header = f.read(8192)
+        except OSError as e:
+            return f"ERROR: {e}"
+
+        # ── 1. magic bytes ────────────────────────────────────────────────
+        magic_result = self._check_magic(header, path)
+        if magic_result is not None:
+            return magic_result
+
+        # ── 2. extension lookup ───────────────────────────────────────────
+        _, ext = os.path.splitext(path)
+        ext_lower = ext.lower()
+
+        # Special-case: Dockerfile has no extension
+        basename = os.path.basename(path).lower()
+        if basename == "dockerfile" or basename.startswith("dockerfile."):
+            return "Dockerfile"
+
+        if ext_lower in self._EXT:
+            label = self._EXT[ext_lower]
+            enc, endings = self._text_info(header)
+            return f"{label}, {enc}, {endings}"
+
+        # ── 3. content heuristics (text) ──────────────────────────────────
+        heuristic = self._content_heuristic(header)
+        if heuristic is not None:
+            enc, endings = self._text_info(header)
+            return f"{heuristic}, {enc}, {endings}"
+
+        # ── 4. fallback ───────────────────────────────────────────────────
+        non_print = sum(
+            1 for b in header
+            if b < 0x09 or (0x0e <= b <= 0x1f) or b == 0x7f
+        )
+        ratio = non_print / len(header)
+        if ratio > 0.10:
+            return f"binary data ({100*ratio:.0f}% non-printable bytes)"
+        enc, endings = self._text_info(header)
+        return f"text, {enc}, {endings}"
+
+    def _check_magic(self, header, path):
+        """Return a description string if a magic signature matches, else None."""
+        for offset, sig, label in self._MAGIC:
+            end = offset + len(sig)
+            if len(header) >= end and header[offset:end] == sig:
+                if label is None:
+                    # RIFF container — disambiguate by sub-type at offset 8
+                    sub = header[8:12]
+                    if sub == b"WAVE":
+                        return "WAV audio"
+                    elif sub == b"AVI ":
+                        return "AVI video"
+                    elif sub == b"WEBP":
+                        dims = self._webp_dims(header)
+                        return f"WebP image{dims}"
+                    else:
+                        return "RIFF container"
+                # Image types with dimension support
+                if label == "PNG image":
+                    dims = self._png_dims(header)
+                    return f"PNG image{dims}"
+                if label == "JPEG image":
+                    dims = self._jpeg_dims(path)
+                    return f"JPEG image{dims}"
+                if label in ("GIF image",):
+                    dims = self._gif_dims(header)
+                    return f"{label}{dims}"
+                # ZIP: probe for Office Open XML formats
+                if label == "ZIP archive":
+                    return self._probe_zip(path)
+                return label
+        return None
+
+    # ── image dimension helpers ───────────────────────────────────────────
+
+    def _png_dims(self, header):
+        # IHDR chunk starts at byte 16, width at 16, height at 20 (4 bytes each, big-endian)
+        if len(header) >= 24:
+            try:
+                import struct
+                w = struct.unpack(">I", header[16:20])[0]
+                h = struct.unpack(">I", header[20:24])[0]
+                return f", {w}x{h}"
+            except Exception:
+                pass
+        return ""
+
+    def _gif_dims(self, header):
+        # Width at offset 6, height at 8, both little-endian uint16
+        if len(header) >= 10:
+            try:
+                import struct
+                w = struct.unpack("<H", header[6:8])[0]
+                h = struct.unpack("<H", header[8:10])[0]
+                return f", {w}x{h}"
+            except Exception:
+                pass
+        return ""
+
+    def _jpeg_dims(self, path):
+        # Must scan for SOF markers; read more of the file
+        try:
+            import struct
+            with open(path, "rb") as f:
+                data = f.read(65536)
+            i = 2  # skip initial SOI marker
+            while i < len(data) - 8:
+                if data[i] != 0xff:
+                    break
+                marker = data[i + 1]
+                # SOF markers: 0xC0..0xC3, 0xC5..0xC7, 0xC9..0xCB, 0xCD..0xCF
+                if marker in (
+                    0xc0, 0xc1, 0xc2, 0xc3,
+                    0xc5, 0xc6, 0xc7,
+                    0xc9, 0xca, 0xcb,
+                    0xcd, 0xce, 0xcf,
+                ):
+                    h = struct.unpack(">H", data[i + 5:i + 7])[0]
+                    w = struct.unpack(">H", data[i + 7:i + 9])[0]
+                    return f", {w}x{h}"
+                # Advance by segment length (2 bytes at i+2, big-endian)
+                if i + 4 > len(data):
+                    break
+                seg_len = struct.unpack(">H", data[i + 2:i + 4])[0]
+                i += 2 + seg_len
+        except Exception:
+            pass
+        return ""
+
+    def _webp_dims(self, header):
+        # WebP VP8 chunk: "VP8 " at offset 12, width/height in VP8 bitstream
+        # VP8L chunk: "VP8L" at offset 12
+        # VP8X chunk: "VP8X" at offset 12, width at 24 (24-bit LE), height at 27
+        if len(header) < 30:
+            return ""
+        try:
+            import struct
+            chunk = header[12:16]
+            if chunk == b"VP8X":
+                # canvas width minus 1 at bytes 24-26, height minus 1 at 27-29
+                w = struct.unpack("<I", header[24:27] + b"\x00")[0] + 1
+                h = struct.unpack("<I", header[27:30] + b"\x00")[0] + 1
+                return f", {w}x{h}"
+            elif chunk == b"VP8 ":
+                # VP8 bitstream starts at offset 20; width/height in frame tag
+                if len(header) >= 30:
+                    w = struct.unpack("<H", header[26:28])[0] & 0x3fff
+                    h = struct.unpack("<H", header[28:30])[0] & 0x3fff
+                    return f", {w}x{h}"
+        except Exception:
+            pass
+        return ""
+
+    # ── ZIP / Office Open XML probe ───────────────────────────────────────
+
+    def _probe_zip(self, path):
+        """Try to distinguish Office Open XML formats from a plain ZIP."""
+        try:
+            import zipfile
+            with zipfile.ZipFile(path, "r") as zf:
+                names = zf.namelist()
+            if "word/document.xml" in names:
+                return "Word document (.docx)"
+            if "xl/workbook.xml" in names:
+                return "Excel workbook (.xlsx)"
+            if "ppt/presentation.xml" in names:
+                return "PowerPoint presentation (.pptx)"
+            if any(n.startswith("META-INF/") for n in names):
+                return "Java archive (JAR)"
+        except Exception:
+            pass
+        return "ZIP archive"
+
+    # ── text analysis helpers ─────────────────────────────────────────────
+
+    def _text_info(self, header):
+        """Return (encoding_str, line_endings_str) for a text chunk."""
+        # Encoding: BOM first
+        if header[:3] == b"\xef\xbb\xbf":
+            enc = "UTF-8 (BOM)"
+        elif header[:2] == b"\xff\xfe":
+            enc = "UTF-16 LE"
+        elif header[:2] == b"\xfe\xff":
+            enc = "UTF-16 BE"
+        else:
+            # Try UTF-8, fall back to Latin-1
+            try:
+                header.decode("utf-8")
+                # Check if it's actually plain ASCII
+                if all(b < 0x80 for b in header):
+                    enc = "ASCII"
+                else:
+                    enc = "UTF-8"
+            except UnicodeDecodeError:
+                enc = "Latin-1"
+
+        # Line endings
+        crlf = header.count(b"\r\n")
+        # Bare CR: \r not followed by \n
+        bare_cr = sum(
+            1 for i, b in enumerate(header)
+            if b == 0x0d and (i + 1 >= len(header) or header[i + 1] != 0x0a)
+        )
+        # Bare LF: \n not preceded by \r
+        bare_lf = sum(
+            1 for i, b in enumerate(header)
+            if b == 0x0a and (i == 0 or header[i - 1] != 0x0d)
+        )
+
+        types = []
+        if crlf:
+            types.append(("CRLF", crlf))
+        if bare_lf:
+            types.append(("LF", bare_lf))
+        if bare_cr:
+            types.append(("CR", bare_cr))
+
+        if not types:
+            endings = "no line endings"
+        elif len(types) == 1:
+            endings = f"{types[0][0]} line endings"
+        else:
+            parts = ", ".join(f"{name}: {count}" for name, count in types)
+            endings = f"mixed line endings ({parts})"
+
+        return enc, endings
+
+    # ── content-based heuristics ──────────────────────────────────────────
+
+    def _content_heuristic(self, header):
+        """Return a type label if content clues identify the file, else None."""
+        # Only attempt if the data looks like text
+        non_print = sum(
+            1 for b in header
+            if b < 0x09 or (0x0e <= b <= 0x1f) or b == 0x7f
+        )
+        if non_print / max(len(header), 1) > 0.10:
+            return None
+
+        try:
+            text = header.decode("utf-8", errors="replace")
+        except Exception:
+            return None
+
+        first_line = text.splitlines()[0] if text.splitlines() else ""
+        first_512 = text[:512].lower()
+
+        # Shebang detection
+        if first_line.startswith("#!"):
+            shebang = first_line[2:].strip()
+            for token, label in [
+                ("python",     "Python script"),
+                ("ruby",       "Ruby script"),
+                ("perl",       "Perl script"),
+                ("node",       "Node.js script"),
+                ("/bash",      "Bash script"),
+                ("/zsh",       "Zsh script"),
+                ("/fish",      "Fish script"),
+                ("/sh",        "Shell script"),
+                ("env sh",     "Shell script"),
+                ("env bash",   "Bash script"),
+            ]:
+                if token in shebang:
+                    return label
+
+        # Content patterns
+        if first_line.strip().startswith("<?php"):
+            return "PHP script"
+        if "<!doctype html" in first_512 or "<html" in first_512:
+            return "HTML document"
+        if first_line.strip().startswith("<?xml"):
+            return "XML document"
+        if first_line.strip().startswith("-----begin"):
+            return "PEM data"
+        if first_line.strip().startswith("---") and ":" in text[:256]:
+            return "YAML data"
+
+        # JSON: first non-whitespace char is { or [
+        stripped = text.lstrip()
+        if stripped and stripped[0] in ("{", "["):
+            try:
+                import json
+                json.loads(text)
+                return "JSON data"
+            except Exception:
+                pass
+
+        return None
+
+
 class RawInputTest:
     def getch(self):
         if IS_WIN:
@@ -2645,17 +3688,5 @@ def dabshell():
     Dabshell(init_shell=True).run()
 
 
-def input_test():
-    inp = RawInputTest()
-    while True:
-        ch = inp.getch()
-        if ord(ch) == 13:
-            print()
-        if ord(ch) == 3:
-            break
-
 if __name__ == "__main__":
-    if len(sys.argv) > 1 and sys.argv[1] == "input-test":
-        input_test()
-    else:
-        dabshell()
+    dabshell()
