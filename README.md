@@ -192,6 +192,14 @@ mkdir dist && cp build/* dist && echo done
 
 ---
 
+## Glob expansion
+
+Many built-in commands accept glob patterns (`*`, `?`) in file arguments. Patterns are always resolved against the **current working directory** of the shell (not the process working directory). When a pattern matches multiple files the results are always in **alphabetical order**. If a pattern matches nothing the literal string is passed through unchanged, allowing the command's usual missing-file error to fire.
+
+Commands that support glob expansion: `ls`, `cat`, `head`, `tail`, `wc`, `diff`, `grep`, `cp`, `mv`, `rm`, `rmdir`, `touch`, `file`, `to-lf`, `to-crlf`, `to-utf8`, `to-utf8-bom`, `to-latin1`.
+
+---
+
 ## Built-in commands
 
 ### Navigation
@@ -703,7 +711,7 @@ end
 
 #### `for <var> in <values...>`
 
-Values can be literals or glob patterns:
+Values can be literals or glob patterns. When a value contains `*` or `?`, it is expanded against the current working directory and the results are sorted alphabetically. The loop variable receives the full absolute path for each match. If a glob pattern matches nothing, the loop body is simply skipped for that pattern.
 
 ```
 for f in *.py

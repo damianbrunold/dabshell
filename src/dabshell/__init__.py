@@ -2210,11 +2210,9 @@ class CmdScript(Cmd):
                 elements = []
                 for element in parts[3:]:
                     if "*" in element or "?" in element:
-                        elements_ = glob.glob(
-                            element,
-                            root_dir=shell.cwd,
-                            recursive=True,
-                        )
+                        if not os.path.isabs(element):
+                            element = os.path.join(shell.cwd, element)
+                        elements_ = sorted(glob.glob(element))
                         elements += elements_
                     else:
                         elements.append(element)
@@ -2411,18 +2409,15 @@ class CmdLs(Cmd):
             return
         files = []
         for filename in dirs:
-            allfiles = glob.glob(filename)
+            if not os.path.isabs(filename):
+                filename = shell.canon(os.path.join(shell.cwd, filename))
+            allfiles = sorted(glob.glob(filename))
             if allfiles:
-                for file in allfiles:
-                    files.append(file)
+                files.extend(allfiles)
             else:
                 files.append(filename)
         for path in files:
-            if os.path.isabs(path):
-                path = shell.canon(path)
-            else:
-                path = shell.canon(os.path.join(shell.cwd, path))
-            self.ls(shell, path, opts)
+            self.ls(shell, shell.canon(path), opts)
 
     def get_entry(self, shell, path, opts):
         entry = {
@@ -2580,11 +2575,10 @@ class CmdCat(Cmd):
         files = []
         for filename in args:
             if not os.path.isabs(filename):
-                filename = os.path.normpath(os.path.join(shell.cwd, filename))
-            allfiles = glob.glob(filename)
+                filename = shell.canon(os.path.join(shell.cwd, filename))
+            allfiles = sorted(glob.glob(filename))
             if allfiles:
-                for file in allfiles:
-                    files.append(file)
+                files.extend(allfiles)
             else:
                 files.append(filename)
         for filename in files:
@@ -2628,10 +2622,9 @@ class CmdDiff(Cmd):
         for filename in args:
             if not os.path.isabs(filename):
                 filename = shell.canon(os.path.join(shell.cwd, filename))
-            allfiles = glob.glob(filename)
+            allfiles = sorted(glob.glob(filename))
             if allfiles:
-                for file in allfiles:
-                    files.append(file)
+                files.extend(allfiles)
             else:
                 files.append(filename)
         if len(files) < 2:
@@ -2694,10 +2687,9 @@ class CmdWc(Cmd):
         for filename in args:
             if not os.path.isabs(filename):
                 filename = shell.canon(os.path.join(shell.cwd, filename))
-            allfiles = glob.glob(filename)
+            allfiles = sorted(glob.glob(filename))
             if allfiles:
-                for file in allfiles:
-                    files.append(file)
+                files.extend(allfiles)
             else:
                 files.append(filename)
         # If no files given and we have piped stdin, count that instead
@@ -2763,10 +2755,9 @@ class CmdTail(Cmd):
         for filename in filenames:
             if not os.path.isabs(filename):
                 filename = shell.canon(os.path.join(shell.cwd, filename))
-            allfiles = glob.glob(filename)
+            allfiles = sorted(glob.glob(filename))
             if allfiles:
-                for file in allfiles:
-                    files.append(file)
+                files.extend(allfiles)
             else:
                 files.append(filename)
         # If no files and we have piped stdin, buffer and tail it
@@ -2895,10 +2886,9 @@ class CmdHead(Cmd):
         for filename in filenames:
             if not os.path.isabs(filename):
                 filename = shell.canon(os.path.join(shell.cwd, filename))
-            allfiles = glob.glob(filename)
+            allfiles = sorted(glob.glob(filename))
             if allfiles:
-                for file in allfiles:
-                    files.append(file)
+                files.extend(allfiles)
             else:
                 files.append(filename)
         # If no files and we have piped stdin, read from it
@@ -2982,11 +2972,10 @@ class CmdCp(Cmd):
         files = []
         for source in sources:
             if not os.path.isabs(source):
-                source = os.path.join(shell.cwd, source)
-            allfiles = glob.glob(source)
+                source = shell.canon(os.path.join(shell.cwd, source))
+            allfiles = sorted(glob.glob(source))
             if allfiles:
-                for file in allfiles:
-                    files.append(file)
+                files.extend(allfiles)
             else:
                 files.append(source)
         for source in files:
@@ -3024,11 +3013,10 @@ class CmdMv(Cmd):
         files = []
         for source in sources:
             if not os.path.isabs(source):
-                source = os.path.join(shell.cwd, source)
-            allfiles = glob.glob(source)
+                source = shell.canon(os.path.join(shell.cwd, source))
+            allfiles = sorted(glob.glob(source))
             if allfiles:
-                for file in allfiles:
-                    files.append(file)
+                files.extend(allfiles)
             else:
                 files.append(source)
         for source in files:
@@ -3125,8 +3113,8 @@ class CmdTouch(Cmd):
         paths = []
         for path in args:
             if not os.path.isabs(path):
-                path = os.path.join(shell.cwd, path)
-            matched = glob.glob(path)
+                path = shell.canon(os.path.join(shell.cwd, path))
+            matched = sorted(glob.glob(path))
             if matched:
                 paths.extend(matched)
             else:
@@ -3157,8 +3145,8 @@ class CmdRm(Cmd):
         for arg in args:
             path = arg
             if not os.path.isabs(path):
-                path = os.path.join(shell.cwd, path)
-            for path in glob.glob(path):
+                path = shell.canon(os.path.join(shell.cwd, path))
+            for path in sorted(glob.glob(path)):
                 if os.path.isdir(path):
                     shell.oute.print(f"ERR: {path}: is a directory")
                     continue
@@ -3182,7 +3170,7 @@ class CmdMkdir(Cmd):
     def execute(self, shell, args):
         for path in args:
             if not os.path.isabs(path):
-                path = os.path.join(shell.cwd, path)
+                path = shell.canon(os.path.join(shell.cwd, path))
             if os.path.isfile(path):
                 shell.oute.print(f"ERR: {path} already exists")
                 continue
@@ -3204,11 +3192,10 @@ class CmdRmdir(Cmd):
         files = []
         for path in args:
             if not os.path.isabs(path):
-                path = os.path.join(shell.cwd, path)
-            allfiles = glob.glob(path)
+                path = shell.canon(os.path.join(shell.cwd, path))
+            allfiles = sorted(glob.glob(path))
             if allfiles:
-                for file in allfiles:
-                    files.append(file)
+                files.extend(allfiles)
             else:
                 files.append(path)
         for path in files:
@@ -3430,11 +3417,9 @@ class CmdGrep(Cmd):
     def walk(self, cwd, locations):
         for location in locations:
             if "*" in location or "?" in location:
-                locs = glob.glob(location)
-                if not locs:
-                    locs = glob.glob(
-                        os.path.normpath(os.path.join(cwd, location))
-                    )
+                if not os.path.isabs(location):
+                    location = os.path.normpath(os.path.join(cwd, location))
+                locs = sorted(glob.glob(location))
                 for loc in locs:
                     yield from self.walk_dir(loc)
             else:

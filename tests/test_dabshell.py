@@ -1541,7 +1541,150 @@ class TestConvertCommands(ShellTestCase):
 
 
 # ═════════════════════════════════════════════════════════════════════════════
-# 23. file — type detection
+# 23. Glob expansion — consistent behaviour across all commands
+# ═════════════════════════════════════════════════════════════════════════════
+
+class TestGlob(ShellTestCase):
+    """Verify that glob patterns always resolve against shell.cwd (not the
+    process cwd) and that results are always in alphabetical order."""
+
+    def setUp(self):
+        super().setUp()
+        # Create files with names chosen so sort order is predictable
+        self.write_file("alpha.txt", "aaa\n")
+        self.write_file("beta.txt",  "bbb\n")
+        self.write_file("gamma.txt", "ccc\n")
+
+    def _change_process_cwd(self):
+        """Change the OS process cwd away from tmpdir to expose bugs where
+        glob was searching the process cwd instead of shell.cwd."""
+        os.chdir(os.path.dirname(self.tmpdir))  # parent of tmpdir
+
+    # ── ls ────────────────────────────────────────────────────────────────────
+
+    def test_ls_glob_uses_shell_cwd(self):
+        self._change_process_cwd()
+        out = self.out("ls *.txt")
+        self.assertIn("alpha.txt", out)
+        self.assertIn("gamma.txt", out)
+
+    def test_ls_glob_sorted(self):
+        self._change_process_cwd()
+        out = self.out("ls *.txt")
+        names = [l.strip() for l in out.splitlines() if l.strip().endswith(".txt")]
+        self.assertEqual(names, sorted(names))
+
+    # ── cat ───────────────────────────────────────────────────────────────────
+
+    def test_cat_glob_uses_shell_cwd(self):
+        self._change_process_cwd()
+        out = self.out("cat *.txt")
+        self.assertIn("aaa", out)
+        self.assertIn("bbb", out)
+        self.assertIn("ccc", out)
+
+    def test_cat_glob_sorted(self):
+        # cat with sorted glob should output alpha, beta, gamma in that order
+        self._change_process_cwd()
+        out = self.out("cat *.txt").replace("\r\n", "\n").replace("\r", "\n")
+        self.assertEqual(out.strip(), "aaa\nbbb\nccc")
+
+    # ── wc ────────────────────────────────────────────────────────────────────
+
+    def test_wc_glob_uses_shell_cwd(self):
+        self._change_process_cwd()
+        out = self.out("wc *.txt")
+        self.assertIn("alpha.txt", out)
+        self.assertIn("Total", out)
+
+    # ── rm ────────────────────────────────────────────────────────────────────
+
+    def test_rm_glob_uses_shell_cwd(self):
+        self._change_process_cwd()
+        self.run_cmd("rm *.txt")
+        remaining = [f for f in os.listdir(self.tmpdir) if f.endswith(".txt")]
+        self.assertEqual(remaining, [])
+
+    # ── cp ────────────────────────────────────────────────────────────────────
+
+    def test_cp_glob_uses_shell_cwd(self):
+        os.mkdir(os.path.join(self.tmpdir, "dest"))
+        self._change_process_cwd()
+        self.run_cmd("cp *.txt dest")
+        self.assertTrue(os.path.isfile(os.path.join(self.tmpdir, "dest", "alpha.txt")))
+        self.assertTrue(os.path.isfile(os.path.join(self.tmpdir, "dest", "gamma.txt")))
+
+    # ── touch ─────────────────────────────────────────────────────────────────
+
+    def test_touch_glob_uses_shell_cwd(self):
+        self._change_process_cwd()
+        import time as _time
+        _time.sleep(0.05)
+        before = {f: os.path.getmtime(os.path.join(self.tmpdir, f))
+                  for f in ["alpha.txt", "beta.txt", "gamma.txt"]}
+        self.run_cmd("touch *.txt")
+        for name, old_mtime in before.items():
+            new_mtime = os.path.getmtime(os.path.join(self.tmpdir, name))
+            self.assertGreaterEqual(new_mtime, old_mtime)
+
+    # ── grep ──────────────────────────────────────────────────────────────────
+
+    def test_grep_glob_uses_shell_cwd(self):
+        self._change_process_cwd()
+        out = self.out("grep aaa *.txt")
+        self.assertIn("aaa", out)
+        self.assertNotIn("bbb", out)
+
+    # ── for-loop glob ─────────────────────────────────────────────────────────
+
+    def test_for_loop_glob_uses_shell_cwd(self):
+        self._change_process_cwd()
+        path = self.write_file("loop.dsh",
+            "for f in *.txt\n    print {f}\nend\n")
+        self.run_cmd(f"source {path}")
+        out = self._out.value()
+        self.assertIn("alpha.txt", out)
+        self.assertIn("gamma.txt", out)
+
+    def test_for_loop_glob_sorted(self):
+        self._change_process_cwd()
+        path = self.write_file("loop.dsh",
+            "for f in *.txt\n    print {f}\nend\n")
+        self.run_cmd(f"source {path}")
+        lines = [l.strip() for l in self._out.value().splitlines()
+                 if l.strip().endswith(".txt")]
+        self.assertEqual(lines, sorted(lines))
+
+    def test_for_loop_glob_absolute_paths(self):
+        # After the fix, for-loop glob vars receive absolute paths
+        self._change_process_cwd()
+        path = self.write_file("loop.dsh",
+            "for f in *.txt\n    print {f}\nend\n")
+        self.run_cmd(f"source {path}")
+        lines = [l.strip() for l in self._out.value().splitlines()
+                 if l.strip().endswith(".txt")]
+        for line in lines:
+            self.assertTrue(os.path.isabs(line),
+                            f"Expected absolute path, got: {line!r}")
+
+    def test_for_loop_no_match_skips(self):
+        # A glob that matches nothing produces no iterations
+        path = self.write_file("nomatch.dsh",
+            "for f in *.xyz\n    print found\nend\n")
+        self.run_cmd(f"source {path}")
+        self.assertNotIn("found", self._out.value())
+
+    # ── no-match passthrough ──────────────────────────────────────────────────
+
+    def test_no_match_produces_error(self):
+        # When a glob matches nothing, the literal is passed to the command
+        # which then gives its normal missing-file error
+        err = self.err("cat *.xyz")
+        self.assertIn("ERR", err)
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# 24. file — type detection
 # ═════════════════════════════════════════════════════════════════════════════
 
 class TestFileCmd(ShellTestCase):
@@ -1589,7 +1732,7 @@ class TestFileCmd(ShellTestCase):
 
 
 # ═════════════════════════════════════════════════════════════════════════════
-# 24. Env class
+# 25. Env class
 # ═════════════════════════════════════════════════════════════════════════════
 
 class TestEnv(unittest.TestCase):
