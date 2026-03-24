@@ -106,6 +106,12 @@ class RawInput:
         if not IS_WIN:
             self._old_settings = termios.tcgetattr(sys.stdin)
             tty.setraw(sys.stdin)
+            # tty.setraw clears OPOST, which disables \n -> \r\n translation on
+            # output.  Re-enable it so commands that write plain \n still move
+            # the cursor to column 1.
+            new = termios.tcgetattr(sys.stdin)
+            new[1] |= termios.OPOST
+            termios.tcsetattr(sys.stdin, termios.TCSADRAIN, new)
 
     def close(self):
         """Restore the terminal to its original settings (Linux only)."""
