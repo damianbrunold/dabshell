@@ -464,7 +464,7 @@ def _parse_redirects(raw):
     while i < len(tokens):
         tok, tok_quoted = tokens[i]
         if tok_quoted:
-            kept.append(tok)
+            kept.append(quote_arg(tok))   # re-quote so split_command sees one token
             i += 1
             continue
         matched_op = None
