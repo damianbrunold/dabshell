@@ -4160,7 +4160,23 @@ class CmdWatch(Cmd):
                 for line in lines:
                     shell.outs.write(line + "\n")
 
-                time.sleep(interval)
+                # On Linux the terminal is in raw mode (ISIG cleared), so
+                # Ctrl+C does not raise KeyboardInterrupt via a signal.
+                # Instead, poll stdin with a timeout; if the user presses
+                # Ctrl+C (\x03) we break out ourselves.
+                if IS_WIN:
+                    time.sleep(interval)
+                else:
+                    deadline = time.monotonic() + interval
+                    while True:
+                        remaining = deadline - time.monotonic()
+                        if remaining <= 0:
+                            break
+                        ready = select.select([sys.stdin], [], [], remaining)[0]
+                        if ready:
+                            ch = sys.stdin.read(1)
+                            if ch == "\x03":
+                                return
         except KeyboardInterrupt:
             pass
 
