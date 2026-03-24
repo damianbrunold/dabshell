@@ -1754,7 +1754,7 @@ class Dabshell:
             if p.returncode != 0:
                 raise CommandFailedException()
             if history:
-                shell._set_title(shell.title)
+                self._set_title(self.title)
         except CommandFailedException:
             raise
         except Exception as e:
@@ -4186,8 +4186,27 @@ class CmdTime(Cmd):
 
 
 def dabshell():
-    Dabshell(init_shell=True).run()
-
-
+    """Entry point for the 'dsh' command.
+ 
+    With no arguments: start the interactive shell.
+    With arguments:    treat argv[1] as a script file, argv[2:] as its
+                       arguments, run it non-interactively, then exit.
+                       This mirrors how bash/python handle 'bash script.sh'.
+    """
+    if len(sys.argv) > 1:
+        # Non-interactive mode: run a script and exit.
+        scriptfile = sys.argv[1]
+        script_args = sys.argv[2:]
+        shell = Dabshell(init_shell=True)
+        try:
+            shell.env.get("script").execute(shell, [scriptfile, *script_args])
+        except CommandFailedException:
+            sys.exit(1)
+        except KeyboardInterrupt:
+            pass
+    else:
+        Dabshell(init_shell=True).run()
+ 
+ 
 if __name__ == "__main__":
     dabshell()

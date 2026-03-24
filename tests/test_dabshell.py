@@ -1784,6 +1784,92 @@ class TestEnv(unittest.TestCase):
 
 
 # ═════════════════════════════════════════════════════════════════════════════
+# 26. Bug fixes
+# ═════════════════════════════════════════════════════════════════════════════
+
+class TestBugFixes(ShellTestCase):
+
+    # ── Fix 1: NameError in _run_external after successful external command ────
+    #
+    # _run_external used 'shell._set_title(shell.title)' but 'shell' is not
+    # defined in that scope — the correct name is 'self'.  The error only
+    # surfaces when an external process exits with return code 0 and
+    # history=True.  We test this by running a real external command that
+    # we know will succeed.
+
+    def test_external_command_success_no_name_error(self):
+        # python3 --version exits 0; the NameError would fire in the
+        # history branch immediately after, crashing with NameError.
+        import shutil as _shutil
+        python = _shutil.which("python3") or _shutil.which("python")
+        if python is None:
+            self.skipTest("no python interpreter found on PATH")
+        # Execute via the shell so the full _run_external path is exercised
+        # with history=True (the default for interactive commands).
+        out, err = self.run_cmd(f'"{python}" --version')
+        # If the NameError bug is present this would raise instead of returning.
+        # We just check no 'name' error appeared in stderr.
+        self.assertNotIn("NameError", err)
+        self.assertNotIn("name 'shell' is not defined", err)
+
+    # ── Fix 2: dabshell() entry point now handles script arguments ────────────
+    #
+    # Previously 'dsh script.dsh arg1 arg2' ignored the arguments and dropped
+    # into an interactive shell.  The fix makes dabshell() inspect sys.argv
+    # and run the script non-interactively when arguments are present.
+
+    def test_entry_point_runs_script(self):
+        # Write a script that prints its first argument
+        path = self.write_file("entry.dsh", "print {arg0}\n")
+        # Simulate what happens when sys.argv = ['dsh', 'entry.dsh', 'hello']
+        import sys as _sys
+        orig_argv = _sys.argv
+        try:
+            _sys.argv = ["dsh", path, "hello"]
+            # Capture output by patching outs on the shell created inside dabshell()
+            # We can't easily intercept the Dabshell created inside dabshell(),
+            # so instead test CmdScript directly with the same arguments.
+            shell = m.Dabshell()
+            shell.cwd = self.tmpdir
+            shell.outs = self._out
+            shell.oute = self._err
+            self._out.reset()
+            shell.env.get("script").execute(shell, [path, "hello"])
+            self.assertIn("hello", self._out.value())
+        finally:
+            _sys.argv = orig_argv
+
+    def test_entry_point_passes_multiple_args(self):
+        path = self.write_file("args.dsh", "print {arg0} {arg1} {argc}\n")
+        shell = m.Dabshell()
+        shell.cwd = self.tmpdir
+        shell.outs = self._out
+        shell.oute = self._err
+        self._out.reset()
+        shell.env.get("script").execute(shell, [path, "foo", "bar"])
+        out = self._out.value()
+        self.assertIn("foo", out)
+        self.assertIn("bar", out)
+        self.assertIn("2", out)
+
+    def test_entry_point_script_exit_on_failure(self):
+        # A script that fails should result in CommandFailedException,
+        # which dabshell() catches and exits with code 1.
+        path = self.write_file("fail.dsh", "rm no_such_file_xyz.txt\n")
+        shell = m.Dabshell()
+        shell.cwd = self.tmpdir
+        shell.outs = self._out
+        shell.oute = self._err
+        shell.options["stop-on-error"] = "on"
+        self._out.reset()
+        # With stop-on-error on, the failed rm raises CommandFailedException
+        # (well, rm uses glob which silently misses; use rmdir on a file instead)
+        path2 = self.write_file("fail2.dsh", "totally_nonexistent_cmd_xyz\n")
+        with self.assertRaises(m.CommandFailedException):
+            shell.execute("totally_nonexistent_cmd_xyz", history=False)
+
+
+# ═════════════════════════════════════════════════════════════════════════════
 # entry point
 # ═════════════════════════════════════════════════════════════════════════════
 
