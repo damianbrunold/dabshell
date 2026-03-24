@@ -1259,8 +1259,10 @@ class Dabshell:
                         self.outp.out.write(f"{esc}[1000D{esc}[0K")
                         self.outp.out.flush()
                         # self.line is unchanged — it held the pre-search content
-                        self.index = len(self.line)
-                        # Fall through to normal line-redraw
+                        self.line  = ""
+                        self.index = 0
+                        self._redraw_line()
+                        continue
 
                     else:
                         # Printable character: refine the search query
