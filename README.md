@@ -511,13 +511,31 @@ date --format "%B %d, %Y"  # e.g. March 15, 2024
 ```
 
 #### `title <text>`
-Set the terminal window title (Windows only).
+Set the terminal window title. Uses the standard OSC escape sequence, which works on Linux/macOS terminals and on Windows 10+ consoles. On very old Windows versions, falls back to the `title` system command.
 ```
 title My Project
 ```
 
 #### `reset-term`
 Reset the terminal state. Useful if the terminal display becomes corrupted.
+
+#### `watch [-n <seconds>] <cmd> [<arg>...]`
+Run a command repeatedly, clearing the screen and redisplaying its output each time. Output is capped to one screen so the display never scrolls. Press `Ctrl+C` to stop.
+
+On Windows, ANSI virtual-terminal processing is enabled automatically at startup so the screen clears the same way as on Linux/macOS. On very old Windows versions where VT mode is unavailable, `cls` is used as a fallback.
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| `-n <seconds>` | `10` | Interval between runs (decimals accepted) |
+
+A header line shows the interval and the command being watched. The output area uses all remaining terminal rows, truncating both line width and line count to fit.
+
+```
+watch ls
+watch -n 5 ls -la
+watch -n 2 git status
+watch -n 30 df -h
+```
 
 #### `time <cmd> [<arg>...]`
 Execute a command and print the elapsed wall-clock time to stderr when it finishes. The output format mirrors the Linux `time` built-in: seconds only for runs under one minute, or `Xm Y.YYYs` for longer runs. The timed command is not added to history.

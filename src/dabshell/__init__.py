@@ -1,3 +1,4 @@
+import ctypes
 import datetime
 import difflib
 import glob
@@ -15,6 +16,34 @@ import tomllib
 esc = "\u001b"
 
 IS_WIN = platform.system() == "Windows"
+
+
+def _enable_win_vt_processing():
+    """Enable ANSI/VT escape-code processing on Windows consoles.
+
+    On Windows 10 v1511+ the console supports VT sequences, but the mode flag
+    must be set explicitly.  This is a no-op on Linux/macOS.
+    Returns True if VT processing is available (always True on non-Windows).
+    """
+    if not IS_WIN:
+        return True
+    try:
+        kernel32 = ctypes.windll.kernel32
+        # STD_OUTPUT_HANDLE = -11
+        handle = kernel32.GetStdHandle(-11)
+        if handle == -1:          # INVALID_HANDLE_VALUE
+            return False
+        mode = ctypes.c_ulong(0)
+        if not kernel32.GetConsoleMode(handle, ctypes.byref(mode)):
+            return False
+        ENABLE_VIRTUAL_TERMINAL_PROCESSING = 0x0004
+        new_mode = mode.value | ENABLE_VIRTUAL_TERMINAL_PROCESSING
+        return bool(kernel32.SetConsoleMode(handle, new_mode))
+    except Exception:
+        return False
+
+
+_VT_ENABLED = _enable_win_vt_processing()
 
 if IS_WIN:
     import msvcrt
@@ -730,8 +759,7 @@ class Dabshell:
         else:
             self.cwd = self.canon(".")
             self.title = "dabshell"
-            if IS_WIN:
-                os.system("title " + self.title)
+            self._set_title(self.title)
             self.env = Env()
             self.outp = StdOutput()
             self.outs = StdOutput()
@@ -781,6 +809,7 @@ class Dabshell:
             self.init_cmd(CmdOption())
             self.init_cmd(CmdOptions())
             self.init_cmd(CmdResetTerm())
+            self.init_cmd(CmdWatch())
             self.init_cmd(CmdTime())
         self.history = []
         self.history_index = -1
@@ -810,6 +839,16 @@ class Dabshell:
 
     def init_cmd(self, cmd):
         self.env.set(cmd.name, cmd)
+
+    def _set_title(self, title):
+        """Set the terminal window title on all platforms."""
+        if _VT_ENABLED:
+            # OSC 0 sequence: works on Linux/macOS terminals and
+            # Windows 10+ console with VT processing enabled.
+            sys.stdout.write(f"\033]0;{title}\007")
+            sys.stdout.flush()
+        elif IS_WIN:
+            os.system("title " + title)
 
     def option_set(self, name):
         return self.options.get(name) in ["on", "yes", "y", "1", "true"]
@@ -1664,8 +1703,8 @@ class Dabshell:
                 )
             if p.returncode != 0:
                 raise CommandFailedException()
-            if IS_WIN and history:
-                os.system("title " + self.title)
+            if history:
+                shell._set_title(shell.title)
         except CommandFailedException:
             raise
         except Exception as e:
@@ -3236,13 +3275,12 @@ class CmdTitle(Cmd):
 
     def help(self):
         return (
-            "<title>   : sets the window title"
+            "<title>   : sets the terminal window title"
         )
 
     def execute(self, shell, args):
-        if IS_WIN:
-            shell.title = " ".join(args)
-            os.system("title " + shell.title)
+        shell.title = " ".join(args)
+        shell._set_title(shell.title)
 
 
 class CmdResetTerm(Cmd):
@@ -3729,6 +3767,86 @@ class CmdFile(Cmd):
                 pass
 
         return None
+
+
+class CmdWatch(Cmd):
+    def __init__(self):
+        Cmd.__init__(self, "watch")
+
+    def help(self):
+        return "[-n <seconds>] <cmd> [<arg>...]   : run a command repeatedly, refreshing the screen each time"
+
+    def execute(self, shell, args):
+        interval = 10
+        cmd_args = []
+        idx = 0
+        while idx < len(args):
+            arg = args[idx]
+            if arg == "-n" and idx + 1 < len(args):
+                try:
+                    interval = float(args[idx + 1])
+                except ValueError:
+                    shell.oute.print(f"ERR: -n requires a numeric value")
+                    return
+                idx += 2
+            else:
+                cmd_args.append(arg)
+                idx += 1
+
+        if not cmd_args:
+            shell.oute.print("ERR: watch requires a command to execute")
+            return
+
+        cmd_line = quote_args(cmd_args)
+        try:
+            while True:
+                term_size = shutil.get_terminal_size()
+                rows = term_size.lines
+                cols = term_size.columns
+
+                # Capture command output
+                captured = StringOutput()
+                saved_outs = shell.outs
+                shell.outs = captured
+                try:
+                    shell.execute(cmd_line, history=False)
+                except CommandFailedException:
+                    pass
+                finally:
+                    shell.outs = saved_outs
+
+                output = captured.value()
+
+                # Build header line
+                header = f"Every {interval:g}s: {cmd_line}"
+                header = header[:cols]
+
+                # Split output into lines and clamp to available rows
+                # Reserve 2 rows: one for the header, one for the blank separator
+                available_rows = max(1, rows - 2)
+                lines = output.splitlines()
+                # Truncate each line to terminal width
+                lines = [line[:cols] for line in lines]
+                # Keep only as many lines as fit on screen
+                lines = lines[:available_rows]
+
+                # Clear screen. On Windows we need VT processing enabled; if
+                # that succeeded at import time we can use the same ANSI
+                # sequence as on Linux/macOS.  If not (very old Windows), fall
+                # back to the 'cls' system command.
+                if _VT_ENABLED:
+                    shell.outs.write("\033[2J\033[H")
+                else:
+                    os.system("cls")
+
+                shell.outs.write(header + "\n")
+                shell.outs.write("\n")
+                for line in lines:
+                    shell.outs.write(line + "\n")
+
+                time.sleep(interval)
+        except KeyboardInterrupt:
+            pass
 
 
 class CmdTime(Cmd):
