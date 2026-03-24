@@ -2586,45 +2586,81 @@ class CmdTail(Cmd):
             if os.path.isdir(filename):
                 continue  # silently skip directories
             with open(filename, "rb") as infile:
-                # TODO for now, we read everything, later, optimize
-                lines = infile.readlines()
+                tail_bytes = self._tail_bytes(infile, n)
                 encoding = "utf8"
-                for line in lines[-n:]:
-                    try:
-                        shell.outs.write(line.decode(encoding))
-                    except Exception:
-                        if encoding == "utf8":
-                            encoding = "Latin1"
-                        else:
-                            encoding = "utf8"
-                        try:
-                            shell.outs.write(line.decode(encoding))
-                        except Exception:
-                            pass
+                try:
+                    text = tail_bytes.decode(encoding)
+                except UnicodeDecodeError:
+                    encoding = "Latin1"
+                    text = tail_bytes.decode(encoding)
+                shell.outs.write(text)
                 if "-f" in args or "--follow" in args:
                     while True:
                         try:
                             line = infile.readline()
                             if line:
                                 try:
-                                    shell.outs.write(
-                                        line.decode(encoding)
-                                    )
+                                    shell.outs.write(line.decode(encoding))
                                 except Exception:
-                                    if encoding == "utf8":
-                                        encoding = "Latin1"
-                                    else:
-                                        encoding = "utf8"
+                                    encoding = "Latin1" if encoding == "utf8" else "utf8"
                                     try:
-                                        shell.outs.write(
-                                            line.decode(encoding)
-                                        )
+                                        shell.outs.write(line.decode(encoding))
                                     except Exception:
                                         pass
                             else:
                                 time.sleep(1)
                         except KeyboardInterrupt:
                             break
+
+    def _tail_bytes(self, infile, n):
+        """Return the raw bytes of the last *n* lines of *infile*.
+
+        Seeks backwards through the file in chunks so that only a small
+        portion of a large file is ever read into memory.  The file must
+        be opened in binary mode and support seeking (regular files do).
+        """
+        if n == 0:
+            return b""
+
+        CHUNK = 1024 * 8
+
+        infile.seek(0, 2)           # seek to end
+        file_size = infile.tell()
+        if file_size == 0:
+            return b""
+
+        # Determine the scan ceiling: if the file ends with '\n' that
+        # newline terminates the last line but is not a separator before
+        # more content, so we skip it when counting.  We still include
+        # it in the final output.
+        infile.seek(-1, 2)
+        ends_with_nl = infile.read(1) == b"\n"
+        scan_end = file_size - 1 if ends_with_nl else file_size
+
+        # Scan backwards through the file counting newlines.
+        # We need to find n newlines to isolate the last n lines.
+        newlines_found = 0
+        pos = scan_end          # current scan position (exclusive upper bound)
+        start = 0               # byte offset of first desired line (default: whole file)
+
+        while pos > 0:
+            chunk_size = min(CHUNK, pos)
+            pos -= chunk_size
+            infile.seek(pos)
+            chunk = infile.read(chunk_size)
+            for i in range(len(chunk) - 1, -1, -1):
+                if chunk[i] == ord(b"\n"):
+                    newlines_found += 1
+                    if newlines_found == n:
+                        start = pos + i + 1
+                        infile.seek(start)
+                        return infile.read()
+            # Haven't found enough newlines yet; keep going
+
+        # Reached the beginning of the file before finding n newlines:
+        # the file has fewer than n lines — return everything.
+        infile.seek(0)
+        return infile.read()
 
 
 class CmdHead(Cmd):
