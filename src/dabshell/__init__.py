@@ -104,6 +104,7 @@ class RawInput:
         # On Linux we put the terminal into raw mode once and leave it there
         # for the whole session, rather than toggling on every keypress.
         if not IS_WIN:
+            self._fd = sys.stdin.fileno()
             self._old_settings = termios.tcgetattr(sys.stdin)
             tty.setraw(sys.stdin)
             # tty.setraw clears OPOST, which disables \n -> \r\n translation on
@@ -156,19 +157,22 @@ class RawInput:
         else:
             return self._getch_linux()
 
+    def _read_byte(self):
+        """Read exactly one byte from stdin, bypassing Python's text/buffer layers."""
+        return os.read(self._fd, 1)[0]
+
     def _getch_linux(self):
-        ch = sys.stdin.read(1)
-        n = ord(ch)
+        n = self._read_byte()
 
         if n == 0x1b:
             # Check if more bytes follow within a short timeout.
             # A lone ESC has no follow-up; an escape sequence does.
-            ready = select.select([sys.stdin], [], [], 0.05)[0]
+            # Use the raw fd with select so Python buffering cannot interfere.
+            ready = select.select([self._fd], [], [], 0.05)[0]
             if not ready:
                 return KEY_ESC
 
-            ch = sys.stdin.read(1)
-            n = ord(ch)
+            n = self._read_byte()
 
             if n == 0x1b:
                 # Double-ESC → treat as ESC
@@ -176,8 +180,7 @@ class RawInput:
 
             elif n == 0x4f:
                 # SS3 sequences:  ESC O X
-                ch = sys.stdin.read(1)
-                n = ord(ch)
+                n = self._read_byte()
                 if n == 0x41: return KEY_UP
                 elif n == 0x42: return KEY_DOWN
                 elif n == 0x43: return KEY_RIGHT
@@ -191,8 +194,7 @@ class RawInput:
 
             elif n == 0x5b:
                 # CSI sequences:  ESC [ ...
-                ch = sys.stdin.read(1)
-                n = ord(ch)
+                n = self._read_byte()
 
                 # Simple one-byte CSI finals
                 if n == 0x41: return KEY_UP
@@ -207,13 +209,12 @@ class RawInput:
                 #   ESC [ 1 ~  →  Home
                 #   ESC [ 4 ~  →  End
                 elif n == 0x31:
-                    next_ch = sys.stdin.read(1)
-                    next_n  = ord(next_ch)
+                    next_n = self._read_byte()
                     if next_n == 0x7e:          # ESC [ 1 ~  →  Home
                         return KEY_HOME
                     elif next_n == 0x3b:        # ESC [ 1 ;  →  modifier sequence
-                        mod  = ord(sys.stdin.read(1))
-                        final = ord(sys.stdin.read(1))
+                        mod   = self._read_byte()
+                        final = self._read_byte()
                         if mod == 0x35:         # Ctrl  (modifier 5)
                             if final == 0x41: return KEY_CTRL_UP
                             elif final == 0x42: return KEY_CTRL_DOWN
@@ -226,25 +227,25 @@ class RawInput:
                     # Any other byte after ESC [ 1 — consume and return ESC
                     return KEY_ESC
                 elif n == 0x32:
-                    sys.stdin.read(1)           # consume trailing ~
+                    self._read_byte()           # consume trailing ~
                     return KEY_ESC              # Insert key — not used, return ESC
                 elif n == 0x33:
-                    sys.stdin.read(1)           # consume trailing ~
+                    self._read_byte()           # consume trailing ~
                     return KEY_DELETE
                 elif n == 0x34:
-                    sys.stdin.read(1)           # consume trailing ~  →  End
+                    self._read_byte()           # consume trailing ~  →  End
                     return KEY_END
                 elif n == 0x35:
-                    sys.stdin.read(1)           # consume trailing ~
+                    self._read_byte()           # consume trailing ~
                     return KEY_PAGEUP
                 elif n == 0x36:
-                    sys.stdin.read(1)           # consume trailing ~
+                    self._read_byte()           # consume trailing ~
                     return KEY_PAGEDOWN
                 elif n == 0x37:
-                    sys.stdin.read(1)           # consume trailing ~  →  Home
+                    self._read_byte()           # consume trailing ~  →  Home
                     return KEY_HOME
                 elif n == 0x38:
-                    sys.stdin.read(1)           # consume trailing ~  →  End
+                    self._read_byte()           # consume trailing ~  →  End
                     return KEY_END
 
                 # Unknown CSI sequence — the final byte is already consumed;
@@ -264,8 +265,17 @@ class RawInput:
             return KEY_CR
         elif 1 <= n <= 26:  # Ctrl+A .. Ctrl+Z  (exclude 0 = Ctrl+Space)
             return -100 - n
+        elif n < 0x80:
+            return chr(n)
         else:
-            return ch
+            # Multi-byte UTF-8 sequence — read continuation bytes and decode.
+            if n < 0xE0:
+                raw = bytes([n, self._read_byte()])
+            elif n < 0xF0:
+                raw = bytes([n, self._read_byte(), self._read_byte()])
+            else:
+                raw = bytes([n, self._read_byte(), self._read_byte(), self._read_byte()])
+            return raw.decode('utf-8', errors='replace')
 
 
 def find_executable_(path, executable):
