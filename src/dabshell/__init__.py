@@ -1468,30 +1468,26 @@ class Dabshell:
         if os.path.isfile(fname):
             entries = []
             with open(fname, encoding="utf8") as infile:
-                for raw in infile:
-                    raw = raw.strip()
-                    if not raw:
-                        continue
-                    try:
-                        rec = raw.split("\t", 1)
-                        if len(rec) == 2:
-                            entries.append((rec[0], rec[1]))
-                    except Exception:
-                        pass
+                while True:
+                    cmd_path = infile.readline()
+                    if not cmd_path:
+                        break
+                    cmd_command = infile.readline()
+                    if not cmd_command:
+                        break
+                    entries.append([cmd_path.strip(), cmd_command.strip()])
             if len(entries) > 1000:
                 # compress older entries
                 idx = len(entries) - 1000
                 older = entries[0:idx]
                 newer = entries[idx:]
-                older = list(sorted(set(older)))
+                older = list(s.split("\n") for s in sorted(set("\n".join(s) for s in older)))
                 entries = older + newer
                 # write compressed entries to file
                 with open(fname, "w", encoding="utf8") as outfile:
                     for path, command in entries:
-                        outfile.write(
-                            path.replace("\t", " ") + "\t"
-                            + command.replace("\n", " ") + "\n"
-                        )
+                        outfile.write(path + "\n")
+                        outfile.write(command.replace("\n", " ") + "\n")
             for idx, entry in enumerate(entries):
                 path, command = entry
                 self.history.append(command)
@@ -1502,10 +1498,10 @@ class Dabshell:
     def append_history(self, path, command):
         fname = os.path.expanduser("~/.dabshell-history")
         with open(fname, "a+", encoding="utf8") as outfile:
-            # Use tab-separated path/command; strip embedded tabs/newlines
-            safe_path = path.replace("\t", " ")
+            # Use two lines, first path, second command
             safe_cmd = command.replace("\n", " ")
-            outfile.write(safe_path + "\t" + safe_cmd + "\n")
+            outfile.write(path + "\n")
+            outfile.write(safe_cmd + "\n")
 
     def execute(self, line, history=True):
         line = line.strip()
