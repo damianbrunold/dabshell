@@ -1870,6 +1870,73 @@ class TestBugFixes(ShellTestCase):
 
 
 # ═════════════════════════════════════════════════════════════════════════════
+# xargs
+# ═════════════════════════════════════════════════════════════════════════════
+
+
+class TestXargs(ShellTestCase):
+
+    def test_basic_xargs(self):
+        """Pipe input lines as arguments to a command."""
+        self.write_file("data.txt", "a\nb\nc\n")
+        out = self.out("cat data.txt | xargs echo")
+        self.assertEqual(out, "a b c")
+
+    def test_xargs_default_echo(self):
+        """Without a command, xargs defaults to echo."""
+        self.write_file("data.txt", "hello world\n")
+        out = self.out("cat data.txt | xargs")
+        self.assertEqual(out, "hello world")
+
+    def test_xargs_n_flag(self):
+        """The -n flag limits arguments per invocation."""
+        self.write_file("data.txt", "a\nb\nc\nd\n")
+        out = self.out("cat data.txt | xargs -n 2 echo")
+        self.assertEqual(out, "a b\nc d")
+
+    def test_xargs_n_uneven(self):
+        """The -n flag with items not evenly divisible."""
+        self.write_file("data.txt", "a\nb\nc\n")
+        out = self.out("cat data.txt | xargs -n 2 echo")
+        self.assertEqual(out, "a b\nc")
+
+    def test_xargs_I_flag(self):
+        """The -I flag replaces a placeholder with each input item."""
+        self.write_file("data.txt", "hello\nworld\n")
+        out = self.out('cat data.txt | xargs -I {} print "item: {}"')
+        self.assertEqual(out, "item: hello\nitem: world")
+
+    def test_xargs_d_flag(self):
+        """The -d flag uses a custom delimiter."""
+        self.write_file("data.txt", "a,b,c")
+        out = self.out("cat data.txt | xargs -d , echo")
+        self.assertEqual(out, "a b c")
+
+    def test_xargs_empty_input(self):
+        """With empty input, xargs produces no output."""
+        self.write_file("data.txt", "")
+        out = self.out("cat data.txt | xargs echo")
+        self.assertEqual(out, "")
+
+    def test_xargs_no_stdin(self):
+        """Without piped input, xargs does nothing."""
+        out = self.out("xargs echo")
+        self.assertEqual(out, "")
+
+    def test_xargs_extra_args(self):
+        """Extra args are prepended before stdin items."""
+        self.write_file("data.txt", "world\n")
+        out = self.out("cat data.txt | xargs echo hello")
+        self.assertEqual(out, "hello world")
+
+    def test_xargs_whitespace_splitting(self):
+        """Input is split on whitespace by default (not just newlines)."""
+        self.write_file("data.txt", "a b\nc d\n")
+        out = self.out("cat data.txt | xargs echo")
+        self.assertEqual(out, "a b c d")
+
+
+# ═════════════════════════════════════════════════════════════════════════════
 # entry point
 # ═════════════════════════════════════════════════════════════════════════════
 

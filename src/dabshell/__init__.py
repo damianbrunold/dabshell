@@ -876,6 +876,7 @@ class Dabshell:
             self.init_cmd(CmdToUtf8Bom())
             self.init_cmd(CmdToLatin1())
             self.init_cmd(CmdWatch())
+            self.init_cmd(CmdXargs())
             self.init_cmd(CmdTime())
         self.history = []
         self.history_index = -1
@@ -4187,6 +4188,76 @@ class CmdWatch(Cmd):
                                 return
         except KeyboardInterrupt:
             pass
+
+
+class CmdXargs(Cmd):
+    def __init__(self):
+        Cmd.__init__(self, "xargs")
+
+    def help(self):
+        return "[-n <max>] [-d <delim>] [-I <repl>] <cmd> [<arg>...]   : build and execute commands from stdin"
+
+    def execute(self, shell, args):
+        if shell.current_stdin is None:
+            return
+        # Parse flags
+        max_args = None
+        delimiter = None
+        replace_str = None
+        i = 0
+        while i < len(args):
+            if args[i] == "-n" and i + 1 < len(args):
+                try:
+                    max_args = int(args[i + 1])
+                except ValueError:
+                    shell.oute.print(f"ERR: xargs: invalid number '{args[i + 1]}'")
+                    return
+                if max_args < 1:
+                    shell.oute.print("ERR: xargs: -n must be at least 1")
+                    return
+                i += 2
+            elif args[i] == "-d" and i + 1 < len(args):
+                delimiter = args[i + 1]
+                i += 2
+            elif args[i] == "-I" and i + 1 < len(args):
+                replace_str = args[i + 1]
+                i += 2
+            else:
+                break
+        cmd_args = args[i:]
+        if not cmd_args:
+            cmd_args = ["echo"]
+        # Read input items
+        raw_input = "".join(shell.current_stdin.readlines())
+        if delimiter is not None:
+            items = raw_input.split(delimiter)
+        else:
+            items = raw_input.split()
+        items = [item for item in items if item]
+        if not items:
+            return
+        # Execute
+        if replace_str is not None:
+            for item in items:
+                replaced = [a.replace(replace_str, item) for a in cmd_args]
+                cmd_line = quote_args(replaced)
+                try:
+                    shell.execute(cmd_line, history=False)
+                except CommandFailedException:
+                    if shell.option_set("stop-on-error"):
+                        raise
+        elif max_args is not None:
+            for batch_start in range(0, len(items), max_args):
+                batch = items[batch_start:batch_start + max_args]
+                cmd_line = quote_args(cmd_args + batch)
+                try:
+                    shell.execute(cmd_line, history=False)
+                except CommandFailedException:
+                    if shell.option_set("stop-on-error"):
+                        raise
+        else:
+            cmd_line = quote_args(cmd_args + items)
+            shell.execute(cmd_line, history=False)
 
 
 class CmdTime(Cmd):
