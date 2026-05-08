@@ -667,6 +667,72 @@ class TestLs(ShellTestCase):
         self.assertLess(names.index("beta.py"), names.index("alpha.txt"))
 
 
+class TestDu(ShellTestCase):
+
+    def setUp(self):
+        super().setUp()
+        os.mkdir(os.path.join(self.tmpdir, "tree"))
+        os.mkdir(os.path.join(self.tmpdir, "tree", "sub1"))
+        os.mkdir(os.path.join(self.tmpdir, "tree", "sub1", "deep"))
+        os.mkdir(os.path.join(self.tmpdir, "tree", "sub2"))
+        self.write_file("tree/a.txt", "a" * 100)
+        self.write_file("tree/sub1/big.txt", "x" * 2048)
+        self.write_file("tree/sub1/deep/d.txt", "y" * 16)
+        self.write_file("tree/sub2/b.txt", "bb")
+
+    def test_du_summary_bytes(self):
+        out = self.out("du -s -b tree")
+        # Total: 100 + 2048 + 16 + 2 = 2166
+        line = out.strip().splitlines()[-1]
+        size_str, label = line.split()
+        self.assertEqual(int(size_str), 2166)
+        self.assertEqual(label, "tree")
+
+    def test_du_default_is_human(self):
+        out = self.out("du -s tree")
+        line = out.strip().splitlines()[-1]
+        # Human format like "2.12K tree" — no leading raw byte count
+        self.assertNotRegex(line, r"^\s*\d{4,}\s")
+        self.assertIn("tree", line)
+
+    def test_du_max_depth_lists_subdirs(self):
+        out = self.out("du -d 1 -b tree")
+        labels = [l.split(None, 1)[1] for l in out.strip().splitlines()]
+        self.assertIn("tree", labels)
+        self.assertIn(os.path.join("tree", "sub1"), labels)
+        self.assertIn(os.path.join("tree", "sub2"), labels)
+        # Grandchildren should NOT appear
+        self.assertNotIn(
+            os.path.join("tree", "sub1", "deep"), labels
+        )
+
+    def test_du_sort_orders_largest_first(self):
+        out = self.out("du -d 1 -b --sort tree")
+        sizes = [int(l.split()[0]) for l in out.strip().splitlines()]
+        self.assertEqual(sizes, sorted(sizes, reverse=True))
+
+    def test_du_all_includes_files(self):
+        out = self.out("du -a -d 1 -b tree")
+        labels = [l.split(None, 1)[1] for l in out.strip().splitlines()]
+        self.assertIn(os.path.join("tree", "a.txt"), labels)
+
+    def test_du_threshold_filters(self):
+        out = self.out("du -d 1 -b --threshold=1K tree")
+        labels = [l.split(None, 1)[1] for l in out.strip().splitlines()]
+        # sub2 has only 2 bytes — should be filtered out
+        self.assertNotIn(os.path.join("tree", "sub2"), labels)
+        # sub1 has 2064 bytes — should be present
+        self.assertIn(os.path.join("tree", "sub1"), labels)
+
+    def test_du_missing_path(self):
+        err = self.err("du nope")
+        self.assertIn("ERR", err)
+
+    def test_du_default_path_is_cwd(self):
+        out = self.out("du -s -b")
+        self.assertTrue(out.strip().endswith("."))
+
+
 # ═════════════════════════════════════════════════════════════════════════════
 # 7. File operations: cp, mv, rm, touch, mkdir, rmdir
 # ═════════════════════════════════════════════════════════════════════════════

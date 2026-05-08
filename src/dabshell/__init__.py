@@ -847,6 +847,7 @@ class Dabshell:
             self.init_cmd(CmdAlias())
             self.init_cmd(CmdCd())
             self.init_cmd(CmdLs())
+            self.init_cmd(CmdDu())
             self.init_cmd(CmdPwd())
             self.init_cmd(CmdSet())
             self.init_cmd(CmdGet())
@@ -2516,6 +2517,171 @@ class CmdLs(Cmd):
                 )
             else:
                 shell.outs.print(pname)
+
+
+class CmdDu(Cmd):
+    def __init__(self):
+        Cmd.__init__(self, "du")
+
+    def help(self):
+        return (
+            "[-s] [-a] [-b] [-d <n>] [--sort] [--threshold=<size>] [<path>...]"
+            "   : prints disk usage of files and directories"
+        )
+
+    def execute(self, shell, args):
+        summary = False
+        all_files = False
+        bytes_mode = False
+        max_depth = None
+        sort_by_size = False
+        threshold = 0
+        paths = []
+        idx = 0
+        after_args = False
+        while idx < len(args):
+            arg = args[idx]
+            if not after_args and (arg.startswith("-") or arg.startswith("--")):
+                if arg == "--":
+                    after_args = True
+                elif arg in ("-s", "--summary"):
+                    summary = True
+                elif arg in ("-a", "--all"):
+                    all_files = True
+                elif arg in ("-b", "--bytes"):
+                    bytes_mode = True
+                elif arg == "-d":
+                    if idx + 1 >= len(args):
+                        shell.oute.print("ERR: du: -d requires an argument")
+                        return
+                    try:
+                        max_depth = int(args[idx + 1])
+                    except ValueError:
+                        shell.oute.print(f"ERR: du: invalid depth {args[idx+1]!r}")
+                        return
+                    idx += 1
+                elif arg.startswith("--max-depth="):
+                    try:
+                        max_depth = int(arg[len("--max-depth="):])
+                    except ValueError:
+                        shell.oute.print(f"ERR: du: invalid depth in {arg!r}")
+                        return
+                elif arg == "--sort":
+                    sort_by_size = True
+                elif arg.startswith("--threshold="):
+                    try:
+                        threshold = self._parse_size(arg[len("--threshold="):])
+                    except ValueError as e:
+                        shell.oute.print(f"ERR: du: {e}")
+                        return
+                else:
+                    shell.oute.print(f"ERR: du: unknown option {arg!r}")
+                    return
+            else:
+                paths.append(arg)
+            idx += 1
+
+        if summary:
+            max_depth = 0
+        if not paths:
+            paths = ["."]
+
+        for path in paths:
+            if not os.path.isabs(path):
+                full = shell.canon(os.path.join(shell.cwd, path))
+            else:
+                full = path
+            if not os.path.exists(full):
+                shell.oute.print(f"ERR: {path} not found")
+                continue
+            entries = []
+            self._walk(full, full, 0, max_depth, all_files, entries)
+            if sort_by_size:
+                entries.sort(key=lambda e: e[1], reverse=True)
+            for label, size in entries:
+                if size < threshold:
+                    continue
+                display_path = path if label == "" else os.path.join(path, label)
+                self._print(shell, size, display_path, bytes_mode)
+
+    def _walk(self, root, current, depth, max_depth, all_files, out):
+        """Walk *current* under *root*, appending (relative_label, size) for
+        each directory and (when all_files) each file within max_depth."""
+        try:
+            if os.path.isfile(current) or os.path.islink(current):
+                size = self._safe_size(current)
+                rel = os.path.relpath(current, root)
+                rel = "" if rel == "." else rel
+                out.append((rel, size))
+                return size
+            total = 0
+            try:
+                names = os.listdir(current)
+            except OSError:
+                names = []
+            for name in names:
+                child = os.path.join(current, name)
+                if os.path.isdir(child) and not os.path.islink(child):
+                    sub = self._walk(
+                        root, child, depth + 1, max_depth, all_files, out
+                    )
+                    total += sub
+                else:
+                    sz = self._safe_size(child)
+                    total += sz
+                    if all_files and (max_depth is None or depth + 1 <= max_depth):
+                        rel = os.path.relpath(child, root)
+                        out.append((rel, sz))
+            if max_depth is None or depth <= max_depth:
+                rel = os.path.relpath(current, root)
+                rel = "" if rel == "." else rel
+                out.append((rel, total))
+            return total
+        except OSError:
+            return 0
+
+    def _safe_size(self, path):
+        try:
+            return os.path.getsize(path)
+        except OSError:
+            return 0
+
+    def _print(self, shell, size, label, bytes_mode):
+        if bytes_mode:
+            shell.outs.print(f"{size:>12} {label}")
+        else:
+            shell.outs.print(f"{self._human(size):>7} {label}")
+
+    def _human(self, size):
+        units = ["B", "K", "M", "G", "T", "P"]
+        s = float(size)
+        i = 0
+        while s >= 1024 and i < len(units) - 1:
+            s /= 1024
+            i += 1
+        if i == 0:
+            return f"{int(s)}{units[i]}"
+        if s >= 100:
+            return f"{s:.0f}{units[i]}"
+        if s >= 10:
+            return f"{s:.1f}{units[i]}"
+        return f"{s:.2f}{units[i]}"
+
+    def _parse_size(self, s):
+        s = s.strip()
+        if not s:
+            raise ValueError("empty size")
+        mult = 1
+        suffix = s[-1].upper()
+        if suffix in "BKMGTP":
+            mult = {"B": 1, "K": 1024, "M": 1024**2, "G": 1024**3,
+                    "T": 1024**4, "P": 1024**5}[suffix]
+            s = s[:-1]
+        try:
+            value = float(s)
+        except ValueError:
+            raise ValueError(f"invalid size {s!r}")
+        return int(value * mult)
 
 
 class CmdCd(Cmd):
