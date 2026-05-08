@@ -733,6 +733,130 @@ class TestDu(ShellTestCase):
         self.assertTrue(out.strip().endswith("."))
 
 
+class TestSortUniqCutTee(ShellTestCase):
+
+    # sort
+
+    def test_sort_basic(self):
+        self.write_file("a.txt", "banana\napple\ncherry\n")
+        out = self.out("sort a.txt")
+        self.assertEqual(out.splitlines(), ["apple", "banana", "cherry"])
+
+    def test_sort_reverse(self):
+        self.write_file("a.txt", "banana\napple\ncherry\n")
+        out = self.out("sort -r a.txt")
+        self.assertEqual(out.splitlines(), ["cherry", "banana", "apple"])
+
+    def test_sort_numeric(self):
+        self.write_file("n.txt", "10\n2\n1\n20\n")
+        out = self.out("sort -n n.txt")
+        self.assertEqual(out.splitlines(), ["1", "2", "10", "20"])
+
+    def test_sort_unique(self):
+        self.write_file("a.txt", "b\na\nb\nc\na\n")
+        out = self.out("sort -u a.txt")
+        self.assertEqual(out.splitlines(), ["a", "b", "c"])
+
+    def test_sort_key(self):
+        self.write_file("a.txt", "z 1\ny 2\nx 3\n")
+        out = self.out("sort -k 2 a.txt")
+        self.assertEqual(out.splitlines(), ["z 1", "y 2", "x 3"])
+
+    def test_sort_pipe(self):
+        self.write_file("a.txt", "c\na\nb\n")
+        out = self.out("cat a.txt | sort")
+        self.assertEqual(out.splitlines(), ["a", "b", "c"])
+
+    # uniq
+
+    def test_uniq_basic(self):
+        self.write_file("u.txt", "a\na\nb\nb\nb\nc\n")
+        out = self.out("uniq u.txt")
+        self.assertEqual(out.splitlines(), ["a", "b", "c"])
+
+    def test_uniq_count(self):
+        self.write_file("u.txt", "a\na\nb\nb\nb\nc\n")
+        out = self.out("uniq -c u.txt")
+        lines = [l.split() for l in out.splitlines()]
+        self.assertEqual(lines, [["2", "a"], ["3", "b"], ["1", "c"]])
+
+    def test_uniq_only_dups(self):
+        self.write_file("u.txt", "a\na\nb\nc\nc\n")
+        out = self.out("uniq -d u.txt")
+        self.assertEqual(out.splitlines(), ["a", "c"])
+
+    def test_uniq_only_unique(self):
+        self.write_file("u.txt", "a\na\nb\nc\nc\n")
+        out = self.out("uniq -u u.txt")
+        self.assertEqual(out.splitlines(), ["b"])
+
+    def test_uniq_ignore_case(self):
+        self.write_file("u.txt", "a\nA\nb\n")
+        out = self.out("uniq -i u.txt")
+        self.assertEqual(out.splitlines(), ["a", "b"])
+
+    def test_uniq_pipe(self):
+        out = self.out("echo a a b b c | tr ' ' '\\n'")
+        # actual test below uses pipe through cat
+        self.write_file("u.txt", "a\na\nb\nb\nc\n")
+        out = self.out("cat u.txt | uniq")
+        self.assertEqual(out.splitlines(), ["a", "b", "c"])
+
+    # cut
+
+    def test_cut_fields_default_tab(self):
+        self.write_file("t.txt", "a\tb\tc\nd\te\tf\n")
+        out = self.out("cut -f 2 t.txt")
+        self.assertEqual(out.splitlines(), ["b", "e"])
+
+    def test_cut_fields_custom_delim(self):
+        self.write_file("c.txt", "a,b,c\nd,e,f\n")
+        out = self.out("cut -d , -f 1,3 c.txt")
+        self.assertEqual(out.splitlines(), ["a,c", "d,f"])
+
+    def test_cut_fields_range(self):
+        self.write_file("c.txt", "a,b,c,d,e\n")
+        out = self.out("cut -d , -f 2-4 c.txt")
+        self.assertEqual(out.splitlines(), ["b,c,d"])
+
+    def test_cut_fields_open_range(self):
+        self.write_file("c.txt", "a,b,c,d,e\n")
+        out = self.out("cut -d , -f 3- c.txt")
+        self.assertEqual(out.splitlines(), ["c,d,e"])
+
+    def test_cut_chars(self):
+        self.write_file("c.txt", "abcdef\nghijkl\n")
+        out = self.out("cut -c 2-4 c.txt")
+        self.assertEqual(out.splitlines(), ["bcd", "hij"])
+
+    def test_cut_requires_one_of_f_c(self):
+        err = self.err("cut a.txt")
+        self.assertIn("ERR", err)
+
+    # tee
+
+    def test_tee_writes_file_and_stdout(self):
+        self.write_file("in.txt", "hello\nworld\n")
+        out = self.out("cat in.txt | tee out.txt")
+        self.assertEqual(out.splitlines(), ["hello", "world"])
+        with open(os.path.join(self.tmpdir, "out.txt"), encoding="utf8") as f:
+            self.assertEqual(f.read(), "hello\nworld\n")
+
+    def test_tee_multiple_files(self):
+        self.write_file("in.txt", "data\n")
+        self.out("cat in.txt | tee a.txt b.txt")
+        for name in ("a.txt", "b.txt"):
+            with open(os.path.join(self.tmpdir, name), encoding="utf8") as f:
+                self.assertEqual(f.read(), "data\n")
+
+    def test_tee_append(self):
+        self.write_file("out.txt", "first\n")
+        self.write_file("in.txt", "second\n")
+        self.out("cat in.txt | tee -a out.txt")
+        with open(os.path.join(self.tmpdir, "out.txt"), encoding="utf8") as f:
+            self.assertEqual(f.read(), "first\nsecond\n")
+
+
 # ═════════════════════════════════════════════════════════════════════════════
 # 7. File operations: cp, mv, rm, touch, mkdir, rmdir
 # ═════════════════════════════════════════════════════════════════════════════

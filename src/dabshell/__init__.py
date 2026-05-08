@@ -860,6 +860,10 @@ class Dabshell:
             self.init_cmd(CmdEcho())
             self.init_cmd(CmdPrint())
             self.init_cmd(CmdGrep())
+            self.init_cmd(CmdSort())
+            self.init_cmd(CmdUniq())
+            self.init_cmd(CmdCut())
+            self.init_cmd(CmdTee())
             self.init_cmd(CmdCp())
             self.init_cmd(CmdMv())
             self.init_cmd(CmdRm())
@@ -3848,6 +3852,356 @@ class CmdGrep(Cmd):
                         yield filepath
             else:
                 yield path
+
+
+class CmdSort(Cmd):
+    def __init__(self):
+        Cmd.__init__(self, "sort")
+
+    def help(self):
+        return (
+            "[-r] [-n] [-u] [-k <field>] [<file>...]"
+            "   : sorts lines from files or stdin"
+        )
+
+    def execute(self, shell, args):
+        reverse = False
+        numeric = False
+        unique = False
+        key = None
+        filenames = []
+        idx = 0
+        after_args = False
+        while idx < len(args):
+            arg = args[idx]
+            if not after_args and (arg.startswith("-") or arg.startswith("--")):
+                if arg == "--":
+                    after_args = True
+                elif arg == "-r":
+                    reverse = True
+                elif arg == "-n":
+                    numeric = True
+                elif arg == "-u":
+                    unique = True
+                elif arg == "-k":
+                    if idx + 1 >= len(args):
+                        shell.oute.print("ERR: sort: -k requires an argument")
+                        return
+                    try:
+                        key = int(args[idx + 1])
+                    except ValueError:
+                        shell.oute.print(
+                            f"ERR: sort: invalid field {args[idx + 1]!r}"
+                        )
+                        return
+                    if key < 1:
+                        shell.oute.print("ERR: sort: field must be >= 1")
+                        return
+                    idx += 1
+                else:
+                    shell.oute.print(f"ERR: sort: unknown option {arg!r}")
+                    return
+            else:
+                filenames.append(arg)
+            idx += 1
+
+        lines = []
+        if filenames:
+            for fn in filenames:
+                if not os.path.isabs(fn):
+                    fn = shell.canon(os.path.join(shell.cwd, fn))
+                if not os.path.exists(fn):
+                    shell.oute.print(f"ERR: {fn} not found")
+                    continue
+                if os.path.isdir(fn):
+                    shell.oute.print(f"ERR: {fn}: is a directory")
+                    continue
+                with open(fn, encoding="utf8", errors="replace") as f:
+                    for line in f:
+                        lines.append(line.rstrip("\n").rstrip("\r"))
+        elif shell.current_stdin is not None:
+            for line in shell.current_stdin:
+                lines.append(line.rstrip("\n").rstrip("\r"))
+
+        def field_value(line):
+            if key is None:
+                return line
+            parts = line.split()
+            if key - 1 < len(parts):
+                return parts[key - 1]
+            return ""
+
+        def sort_key(line):
+            v = field_value(line)
+            if numeric:
+                try:
+                    return (0, float(v))
+                except ValueError:
+                    return (1, v)  # non-numeric sorts after numeric
+            return (0, v)
+
+        lines.sort(key=sort_key, reverse=reverse)
+
+        if unique:
+            seen = set()
+            deduped = []
+            for line in lines:
+                k = sort_key(line)
+                if k not in seen:
+                    seen.add(k)
+                    deduped.append(line)
+            lines = deduped
+
+        for line in lines:
+            shell.outs.print(line)
+
+
+class CmdUniq(Cmd):
+    def __init__(self):
+        Cmd.__init__(self, "uniq")
+
+    def help(self):
+        return (
+            "[-c] [-d] [-u] [-i] [<file>]"
+            "   : collapse adjacent duplicate lines"
+        )
+
+    def execute(self, shell, args):
+        count_mode = False
+        only_dups = False
+        only_unique = False
+        ignore_case = False
+        filename = None
+        idx = 0
+        after_args = False
+        while idx < len(args):
+            arg = args[idx]
+            if not after_args and (arg.startswith("-") or arg.startswith("--")):
+                if arg == "--":
+                    after_args = True
+                elif arg == "-c":
+                    count_mode = True
+                elif arg == "-d":
+                    only_dups = True
+                elif arg == "-u":
+                    only_unique = True
+                elif arg == "-i":
+                    ignore_case = True
+                else:
+                    shell.oute.print(f"ERR: uniq: unknown option {arg!r}")
+                    return
+            else:
+                if filename is not None:
+                    shell.oute.print("ERR: uniq: only one file allowed")
+                    return
+                filename = arg
+            idx += 1
+
+        if filename is not None:
+            fn = filename
+            if not os.path.isabs(fn):
+                fn = shell.canon(os.path.join(shell.cwd, fn))
+            if not os.path.exists(fn):
+                shell.oute.print(f"ERR: {fn} not found")
+                return
+            source = open(fn, encoding="utf8", errors="replace")
+            close_after = True
+        elif shell.current_stdin is not None:
+            source = shell.current_stdin
+            close_after = False
+        else:
+            return
+
+        prev = None
+        prev_key = None
+        count = 0
+
+        def emit():
+            if prev is None:
+                return
+            if only_dups and count < 2:
+                return
+            if only_unique and count > 1:
+                return
+            if count_mode:
+                shell.outs.print(f"{count:7} {prev}")
+            else:
+                shell.outs.print(prev)
+
+        try:
+            for line in source:
+                line = line.rstrip("\n").rstrip("\r")
+                key = line.lower() if ignore_case else line
+                if prev_key is None:
+                    prev = line
+                    prev_key = key
+                    count = 1
+                elif key == prev_key:
+                    count += 1
+                else:
+                    emit()
+                    prev = line
+                    prev_key = key
+                    count = 1
+            emit()
+        finally:
+            if close_after:
+                source.close()
+
+
+class CmdCut(Cmd):
+    def __init__(self):
+        Cmd.__init__(self, "cut")
+
+    def help(self):
+        return (
+            "(-f <list> [-d <delim>] | -c <list>) [<file>...]"
+            "   : extract fields or characters from each line"
+        )
+
+    def execute(self, shell, args):
+        delim = "\t"
+        fields_spec = None
+        chars_spec = None
+        filenames = []
+        idx = 0
+        after_args = False
+        while idx < len(args):
+            arg = args[idx]
+            if not after_args and (arg.startswith("-") or arg.startswith("--")):
+                if arg == "--":
+                    after_args = True
+                elif arg == "-d":
+                    if idx + 1 >= len(args):
+                        shell.oute.print("ERR: cut: -d requires an argument")
+                        return
+                    delim = args[idx + 1]
+                    idx += 1
+                elif arg == "-f":
+                    if idx + 1 >= len(args):
+                        shell.oute.print("ERR: cut: -f requires an argument")
+                        return
+                    fields_spec = args[idx + 1]
+                    idx += 1
+                elif arg == "-c":
+                    if idx + 1 >= len(args):
+                        shell.oute.print("ERR: cut: -c requires an argument")
+                        return
+                    chars_spec = args[idx + 1]
+                    idx += 1
+                else:
+                    shell.oute.print(f"ERR: cut: unknown option {arg!r}")
+                    return
+            else:
+                filenames.append(arg)
+            idx += 1
+
+        if (fields_spec is None) == (chars_spec is None):
+            shell.oute.print("ERR: cut: specify exactly one of -f or -c")
+            return
+
+        try:
+            ranges = self._parse_ranges(fields_spec or chars_spec)
+        except ValueError as e:
+            shell.oute.print(f"ERR: cut: {e}")
+            return
+
+        def select(seq):
+            out = []
+            n = len(seq)
+            taken = [False] * n
+            for lo, hi in ranges:
+                end = n if hi is None else min(hi, n)
+                for i in range(lo - 1, end):
+                    if not taken[i]:
+                        out.append(seq[i])
+                        taken[i] = True
+            return out
+
+        def process_line(line):
+            if chars_spec is not None:
+                return "".join(select(list(line)))
+            parts = line.split(delim)
+            return delim.join(select(parts))
+
+        if filenames:
+            for fn in filenames:
+                if not os.path.isabs(fn):
+                    fn = shell.canon(os.path.join(shell.cwd, fn))
+                if not os.path.exists(fn):
+                    shell.oute.print(f"ERR: {fn} not found")
+                    continue
+                with open(fn, encoding="utf8", errors="replace") as f:
+                    for line in f:
+                        line = line.rstrip("\n").rstrip("\r")
+                        shell.outs.print(process_line(line))
+        elif shell.current_stdin is not None:
+            for line in shell.current_stdin:
+                line = line.rstrip("\n").rstrip("\r")
+                shell.outs.print(process_line(line))
+
+    def _parse_ranges(self, spec):
+        """Parse a comma-separated list like '1,3-5,7-' into list of (lo, hi)
+        tuples, hi=None means open-ended."""
+        result = []
+        for part in spec.split(","):
+            part = part.strip()
+            if not part:
+                continue
+            if "-" in part:
+                lhs, rhs = part.split("-", 1)
+                lo = int(lhs) if lhs else 1
+                hi = int(rhs) if rhs else None
+            else:
+                lo = hi = int(part)
+            if lo < 1 or (hi is not None and hi < lo):
+                raise ValueError(f"invalid range {part!r}")
+            result.append((lo, hi))
+        if not result:
+            raise ValueError("empty range list")
+        return result
+
+
+class CmdTee(Cmd):
+    def __init__(self):
+        Cmd.__init__(self, "tee")
+
+    def help(self):
+        return (
+            "[-a] <file> ..."
+            "   : copy stdin to each file and to stdout"
+        )
+
+    def execute(self, shell, args):
+        append = False
+        files = []
+        for arg in args:
+            if arg == "-a" or arg == "--append":
+                append = True
+            else:
+                files.append(arg)
+
+        if shell.current_stdin is None:
+            return
+
+        handles = []
+        for fn in files:
+            if not os.path.isabs(fn):
+                fn = shell.canon(os.path.join(shell.cwd, fn))
+            mode = "a" if append else "w"
+            try:
+                handles.append(open(fn, mode, encoding="utf8"))
+            except OSError as e:
+                shell.oute.print(f"ERR: tee: {fn}: {e}")
+
+        try:
+            for line in shell.current_stdin:
+                shell.outs.write(line)
+                for h in handles:
+                    h.write(line)
+        finally:
+            for h in handles:
+                h.close()
 
 
 class CmdDate(Cmd):
