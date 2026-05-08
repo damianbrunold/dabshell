@@ -866,6 +866,8 @@ class Dabshell:
             self.init_cmd(CmdTee())
             self.init_cmd(CmdFind())
             self.init_cmd(CmdHash())
+            self.init_cmd(CmdJson())
+            self.init_cmd(CmdFetch())
             self.init_cmd(CmdCp())
             self.init_cmd(CmdMv())
             self.init_cmd(CmdRm())
@@ -4396,6 +4398,204 @@ class CmdHash(Cmd):
                 else:
                     h.update(line.encode("utf8", errors="replace"))
             shell.outs.print(h.hexdigest())
+
+
+class CmdJson(Cmd):
+    def __init__(self):
+        Cmd.__init__(self, "json")
+
+    def help(self):
+        return (
+            "[-c] [-p <path>] [-i <indent>] [<file>]"
+            "   : pretty-prints JSON or extracts a value at <path> "
+            "(dot/index syntax: 'users.0.name')"
+        )
+
+    def execute(self, shell, args):
+        compact = False
+        path = None
+        indent = 2
+        filename = None
+        idx = 0
+        after_args = False
+        while idx < len(args):
+            arg = args[idx]
+            if not after_args and (arg.startswith("-") or arg.startswith("--")):
+                if arg == "--":
+                    after_args = True
+                elif arg == "-c":
+                    compact = True
+                elif arg == "-p":
+                    if idx + 1 >= len(args):
+                        shell.oute.print("ERR: json: -p requires an argument")
+                        return
+                    path = args[idx + 1]
+                    idx += 1
+                elif arg == "-i":
+                    if idx + 1 >= len(args):
+                        shell.oute.print("ERR: json: -i requires an argument")
+                        return
+                    try:
+                        indent = int(args[idx + 1])
+                    except ValueError:
+                        shell.oute.print(
+                            f"ERR: json: invalid indent {args[idx + 1]!r}"
+                        )
+                        return
+                    idx += 1
+                else:
+                    shell.oute.print(f"ERR: json: unknown option {arg!r}")
+                    return
+            else:
+                if filename is not None:
+                    shell.oute.print("ERR: json: only one file allowed")
+                    return
+                filename = arg
+            idx += 1
+
+        if filename is not None:
+            fn = filename
+            if not os.path.isabs(fn):
+                fn = shell.canon(os.path.join(shell.cwd, fn))
+            if not os.path.exists(fn):
+                shell.oute.print(f"ERR: {fn} not found")
+                return
+            with open(fn, encoding="utf8") as f:
+                text = f.read()
+        elif shell.current_stdin is not None:
+            text = "".join(shell.current_stdin)
+        else:
+            shell.oute.print("ERR: json: no input")
+            return
+
+        import json as _json
+        try:
+            data = _json.loads(text)
+        except _json.JSONDecodeError as e:
+            shell.oute.print(f"ERR: json: parse error: {e}")
+            return
+
+        if path is not None:
+            try:
+                data = self._walk_path(data, path)
+            except (KeyError, IndexError, TypeError) as e:
+                shell.oute.print(f"ERR: json: {e}")
+                return
+
+        if isinstance(data, str) and path is not None:
+            shell.outs.print(data)
+            return
+        if compact:
+            shell.outs.print(_json.dumps(data, ensure_ascii=False))
+        else:
+            shell.outs.print(
+                _json.dumps(data, ensure_ascii=False, indent=indent)
+            )
+
+    def _walk_path(self, data, path):
+        for part in path.split("."):
+            if part == "":
+                continue
+            if isinstance(data, list):
+                data = data[int(part)]
+            elif isinstance(data, dict):
+                data = data[part]
+            else:
+                raise TypeError(
+                    f"cannot descend into {type(data).__name__} at {part!r}"
+                )
+        return data
+
+
+class CmdFetch(Cmd):
+    def __init__(self):
+        Cmd.__init__(self, "fetch")
+
+    def help(self):
+        return (
+            "[-o <file>] [-H <header>]... [--timeout <s>] <url>"
+            "   : downloads from a URL (HTTP GET); writes to stdout or <file>"
+        )
+
+    def execute(self, shell, args):
+        output = None
+        headers = []
+        timeout = 30.0
+        url = None
+        idx = 0
+        while idx < len(args):
+            arg = args[idx]
+            if arg == "-o":
+                if idx + 1 >= len(args):
+                    shell.oute.print("ERR: fetch: -o requires an argument")
+                    return
+                output = args[idx + 1]
+                idx += 2
+                continue
+            if arg == "-H":
+                if idx + 1 >= len(args):
+                    shell.oute.print("ERR: fetch: -H requires an argument")
+                    return
+                headers.append(args[idx + 1])
+                idx += 2
+                continue
+            if arg == "--timeout":
+                if idx + 1 >= len(args):
+                    shell.oute.print(
+                        "ERR: fetch: --timeout requires an argument"
+                    )
+                    return
+                try:
+                    timeout = float(args[idx + 1])
+                except ValueError:
+                    shell.oute.print(
+                        f"ERR: fetch: invalid timeout {args[idx + 1]!r}"
+                    )
+                    return
+                idx += 2
+                continue
+            if arg.startswith("-"):
+                shell.oute.print(f"ERR: fetch: unknown option {arg!r}")
+                return
+            if url is not None:
+                shell.oute.print("ERR: fetch: only one URL allowed")
+                return
+            url = arg
+            idx += 1
+
+        if url is None:
+            shell.oute.print("ERR: fetch: missing URL")
+            return
+
+        import urllib.request as _ureq
+        req = _ureq.Request(url)
+        for h in headers:
+            if ":" not in h:
+                shell.oute.print(f"ERR: fetch: invalid header {h!r}")
+                return
+            name, value = h.split(":", 1)
+            req.add_header(name.strip(), value.strip())
+
+        try:
+            with _ureq.urlopen(req, timeout=timeout) as resp:
+                if output is not None:
+                    out_path = output
+                    if not os.path.isabs(out_path):
+                        out_path = shell.canon(
+                            os.path.join(shell.cwd, out_path)
+                        )
+                    with open(out_path, "wb") as f:
+                        for chunk in iter(lambda: resp.read(65536), b""):
+                            f.write(chunk)
+                else:
+                    data = resp.read()
+                    encoding = resp.headers.get_content_charset() or "utf8"
+                    try:
+                        shell.outs.write(data.decode(encoding))
+                    except UnicodeDecodeError:
+                        shell.outs.write(data.decode("latin1"))
+        except Exception as e:
+            shell.oute.print(f"ERR: fetch: {e}")
 
 
 class CmdDate(Cmd):

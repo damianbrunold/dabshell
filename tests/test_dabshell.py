@@ -939,6 +939,125 @@ class TestFindHash(ShellTestCase):
         )
 
 
+class TestJson(ShellTestCase):
+
+    def setUp(self):
+        super().setUp()
+        self.write_file(
+            "data.json",
+            '{"name":"alice","age":30,"tags":["a","b","c"]}',
+        )
+
+    def test_json_pretty_print(self):
+        out = self.out("json data.json")
+        self.assertIn('"name"', out)
+        # Pretty: contains indented newlines
+        self.assertIn("\n  ", out)
+
+    def test_json_compact(self):
+        out = self.out("json -c data.json")
+        # No leading whitespace lines beyond a single-line dump
+        self.assertEqual(len(out.splitlines()), 1)
+
+    def test_json_path_string(self):
+        out = self.out("json -p name data.json")
+        self.assertEqual(out.strip(), "alice")
+
+    def test_json_path_index(self):
+        out = self.out("json -p tags.1 data.json")
+        self.assertEqual(out.strip(), "b")
+
+    def test_json_path_object(self):
+        self.write_file(
+            "n.json",
+            '{"users":[{"name":"x"},{"name":"y"}]}',
+        )
+        out = self.out("json -p users.1.name n.json")
+        self.assertEqual(out.strip(), "y")
+
+    def test_json_invalid(self):
+        self.write_file("bad.json", "{not json")
+        err = self.err("json bad.json")
+        self.assertIn("ERR", err)
+
+    def test_json_pipe(self):
+        out = self.out("cat data.json | json -p age")
+        self.assertEqual(out.strip(), "30")
+
+
+class TestFetch(ShellTestCase):
+
+    def _patch_urlopen(self, body=b"hello world", charset="utf-8"):
+        import urllib.request as _ureq
+
+        class _FakeResp:
+            def __init__(self, b, cs):
+                self._b = b
+                self._read = False
+                self.headers = type("H", (), {
+                    "get_content_charset": lambda self_h: cs
+                })()
+
+            def read(self, n=-1):
+                if self._read:
+                    return b""
+                self._read = True
+                return self._b
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                pass
+
+        captured = {}
+
+        def fake_urlopen(req, timeout=None):
+            captured["url"] = req.full_url
+            captured["headers"] = dict(req.header_items())
+            captured["timeout"] = timeout
+            return _FakeResp(body, charset)
+
+        self._orig_urlopen = _ureq.urlopen
+        _ureq.urlopen = fake_urlopen
+        return captured
+
+    def _restore_urlopen(self):
+        import urllib.request as _ureq
+        _ureq.urlopen = self._orig_urlopen
+
+    def test_fetch_to_stdout(self):
+        cap = self._patch_urlopen(body=b"hello")
+        try:
+            out = self.out("fetch http://example.com/x")
+            self.assertEqual(out.strip(), "hello")
+            self.assertEqual(cap["url"], "http://example.com/x")
+        finally:
+            self._restore_urlopen()
+
+    def test_fetch_to_file(self):
+        self._patch_urlopen(body=b"payload")
+        try:
+            self.run_cmd("fetch -o out.bin http://example.com/x")
+            with open(os.path.join(self.tmpdir, "out.bin"), "rb") as f:
+                self.assertEqual(f.read(), b"payload")
+        finally:
+            self._restore_urlopen()
+
+    def test_fetch_headers(self):
+        cap = self._patch_urlopen()
+        try:
+            self.run_cmd("fetch -H X-Foo:bar http://example.com/x")
+            # urllib normalises header names to title case
+            self.assertIn(("X-foo", "bar"), list(cap["headers"].items()))
+        finally:
+            self._restore_urlopen()
+
+    def test_fetch_missing_url(self):
+        err = self.err("fetch")
+        self.assertIn("ERR", err)
+
+
 # ═════════════════════════════════════════════════════════════════════════════
 # 7. File operations: cp, mv, rm, touch, mkdir, rmdir
 # ═════════════════════════════════════════════════════════════════════════════
