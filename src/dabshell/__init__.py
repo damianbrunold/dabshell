@@ -864,6 +864,8 @@ class Dabshell:
             self.init_cmd(CmdUniq())
             self.init_cmd(CmdCut())
             self.init_cmd(CmdTee())
+            self.init_cmd(CmdFind())
+            self.init_cmd(CmdHash())
             self.init_cmd(CmdCp())
             self.init_cmd(CmdMv())
             self.init_cmd(CmdRm())
@@ -4202,6 +4204,198 @@ class CmdTee(Cmd):
         finally:
             for h in handles:
                 h.close()
+
+
+class CmdFind(Cmd):
+    def __init__(self):
+        Cmd.__init__(self, "find")
+
+    def help(self):
+        return (
+            "[<path>...] [-name <glob>] [-iname <glob>] [-type f|d] "
+            "[-maxdepth <n>]"
+            "   : finds files and directories matching the criteria"
+        )
+
+    def execute(self, shell, args):
+        paths = []
+        name_glob = None
+        iname_glob = None
+        type_filter = None
+        max_depth = None
+        idx = 0
+        while idx < len(args):
+            arg = args[idx]
+            if arg == "-name":
+                if idx + 1 >= len(args):
+                    shell.oute.print("ERR: find: -name requires an argument")
+                    return
+                name_glob = args[idx + 1]
+                idx += 2
+                continue
+            if arg == "-iname":
+                if idx + 1 >= len(args):
+                    shell.oute.print("ERR: find: -iname requires an argument")
+                    return
+                iname_glob = args[idx + 1]
+                idx += 2
+                continue
+            if arg == "-type":
+                if idx + 1 >= len(args):
+                    shell.oute.print("ERR: find: -type requires an argument")
+                    return
+                t = args[idx + 1]
+                if t not in ("f", "d"):
+                    shell.oute.print(f"ERR: find: -type must be f or d, got {t!r}")
+                    return
+                type_filter = t
+                idx += 2
+                continue
+            if arg == "-maxdepth":
+                if idx + 1 >= len(args):
+                    shell.oute.print(
+                        "ERR: find: -maxdepth requires an argument"
+                    )
+                    return
+                try:
+                    max_depth = int(args[idx + 1])
+                except ValueError:
+                    shell.oute.print(
+                        f"ERR: find: invalid maxdepth {args[idx + 1]!r}"
+                    )
+                    return
+                idx += 2
+                continue
+            if arg.startswith("-"):
+                shell.oute.print(f"ERR: find: unknown option {arg!r}")
+                return
+            paths.append(arg)
+            idx += 1
+
+        if not paths:
+            paths = ["."]
+
+        import fnmatch as _fnmatch
+        for path in paths:
+            if not os.path.isabs(path):
+                full = shell.canon(os.path.join(shell.cwd, path))
+            else:
+                full = path
+            if not os.path.exists(full):
+                shell.oute.print(f"ERR: {path} not found")
+                continue
+            for entry, depth, is_dir in self._walk(full, max_depth):
+                if type_filter == "f" and is_dir:
+                    continue
+                if type_filter == "d" and not is_dir:
+                    continue
+                base = os.path.basename(entry)
+                if name_glob is not None and not _fnmatch.fnmatchcase(
+                    base, name_glob
+                ):
+                    continue
+                if iname_glob is not None and not _fnmatch.fnmatchcase(
+                    base.lower(), iname_glob.lower()
+                ):
+                    continue
+                rel = os.path.relpath(entry, shell.cwd)
+                # Prefer relative path if it's not above cwd; else absolute.
+                if rel.startswith(".."):
+                    shell.outs.print(entry)
+                else:
+                    shell.outs.print(rel)
+
+    def _walk(self, root, max_depth):
+        is_dir = os.path.isdir(root) and not os.path.islink(root)
+        yield root, 0, is_dir
+        if not is_dir:
+            return
+        stack = [(root, 0)]
+        while stack:
+            current, depth = stack.pop()
+            if max_depth is not None and depth >= max_depth:
+                continue
+            try:
+                names = sorted(os.listdir(current))
+            except OSError:
+                continue
+            for name in names:
+                child = os.path.join(current, name)
+                child_is_dir = (
+                    os.path.isdir(child) and not os.path.islink(child)
+                )
+                yield child, depth + 1, child_is_dir
+                if child_is_dir:
+                    stack.append((child, depth + 1))
+
+
+class CmdHash(Cmd):
+    def __init__(self):
+        Cmd.__init__(self, "hash")
+
+    def help(self):
+        return (
+            "[-a md5|sha1|sha256|sha512] [<file>...]"
+            "   : computes a cryptographic hash of files or stdin"
+        )
+
+    def execute(self, shell, args):
+        algo = "sha256"
+        filenames = []
+        idx = 0
+        after_args = False
+        while idx < len(args):
+            arg = args[idx]
+            if not after_args and (arg.startswith("-") or arg.startswith("--")):
+                if arg == "--":
+                    after_args = True
+                elif arg == "-a":
+                    if idx + 1 >= len(args):
+                        shell.oute.print("ERR: hash: -a requires an argument")
+                        return
+                    algo = args[idx + 1].lower()
+                    idx += 1
+                else:
+                    shell.oute.print(f"ERR: hash: unknown option {arg!r}")
+                    return
+            else:
+                filenames.append(arg)
+            idx += 1
+
+        import hashlib as _hashlib
+        if algo not in _hashlib.algorithms_guaranteed:
+            shell.oute.print(f"ERR: hash: unsupported algorithm {algo!r}")
+            return
+
+        if filenames:
+            for fn in filenames:
+                if not os.path.isabs(fn):
+                    fn_abs = shell.canon(os.path.join(shell.cwd, fn))
+                else:
+                    fn_abs = fn
+                if not os.path.exists(fn_abs):
+                    shell.oute.print(f"ERR: {fn} not found")
+                    continue
+                if os.path.isdir(fn_abs):
+                    shell.oute.print(f"ERR: {fn}: is a directory")
+                    continue
+                h = _hashlib.new(algo)
+                try:
+                    with open(fn_abs, "rb") as f:
+                        for chunk in iter(lambda: f.read(65536), b""):
+                            h.update(chunk)
+                except OSError as e:
+                    shell.oute.print(f"ERR: {fn}: {e}")
+                    continue
+                shell.outs.print(f"{h.hexdigest()}  {fn}")
+        elif shell.current_stdin is not None:
+            h = _hashlib.new(algo)
+            for line in shell.current_stdin:
+                if isinstance(line, bytes):
+                    h.update(line)
+                else:
+                    h.update(line.encode("utf8", errors="replace"))
+            shell.outs.print(h.hexdigest())
 
 
 class CmdDate(Cmd):

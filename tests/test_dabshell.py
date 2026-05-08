@@ -857,6 +857,88 @@ class TestSortUniqCutTee(ShellTestCase):
             self.assertEqual(f.read(), "first\nsecond\n")
 
 
+class TestFindHash(ShellTestCase):
+
+    def setUp(self):
+        super().setUp()
+        os.mkdir(os.path.join(self.tmpdir, "tree"))
+        os.mkdir(os.path.join(self.tmpdir, "tree", "sub"))
+        self.write_file("tree/a.txt", "alpha")
+        self.write_file("tree/b.py", "beta")
+        self.write_file("tree/sub/c.txt", "gamma")
+
+    # find
+
+    def test_find_default_lists_all(self):
+        out = self.out("find tree")
+        items = set(out.splitlines())
+        self.assertIn("tree", items)
+        self.assertIn(os.path.join("tree", "a.txt"), items)
+        self.assertIn(os.path.join("tree", "sub"), items)
+        self.assertIn(os.path.join("tree", "sub", "c.txt"), items)
+
+    def test_find_name_glob(self):
+        out = self.out("find tree -name *.txt")
+        items = set(out.splitlines())
+        self.assertIn(os.path.join("tree", "a.txt"), items)
+        self.assertIn(os.path.join("tree", "sub", "c.txt"), items)
+        self.assertNotIn(os.path.join("tree", "b.py"), items)
+
+    def test_find_type_filter(self):
+        out = self.out("find tree -type d")
+        items = set(out.splitlines())
+        self.assertIn("tree", items)
+        self.assertIn(os.path.join("tree", "sub"), items)
+        self.assertNotIn(os.path.join("tree", "a.txt"), items)
+
+    def test_find_maxdepth(self):
+        out = self.out("find tree -maxdepth 1")
+        items = set(out.splitlines())
+        self.assertIn(os.path.join("tree", "a.txt"), items)
+        self.assertNotIn(os.path.join("tree", "sub", "c.txt"), items)
+
+    def test_find_iname(self):
+        self.write_file("tree/UPPER.TXT", "x")
+        out = self.out("find tree -iname *.txt")
+        items = set(out.splitlines())
+        self.assertIn(os.path.join("tree", "UPPER.TXT"), items)
+
+    # hash
+
+    def test_hash_sha256_default(self):
+        self.write_file("h.txt", "hello\n")
+        out = self.out("hash h.txt")
+        # sha256("hello\n") == 5891b5b522d5df086d0ff0b110fbd9d21bb4fc7163af34d08286a2e846f6be03
+        self.assertIn(
+            "5891b5b522d5df086d0ff0b110fbd9d21bb4fc7163af34d08286a2e846f6be03",
+            out,
+        )
+        self.assertIn("h.txt", out)
+
+    def test_hash_md5(self):
+        self.write_file("h.txt", "hello\n")
+        out = self.out("hash -a md5 h.txt")
+        # md5("hello\n") == b1946ac92492d2347c6235b4d2611184
+        self.assertIn("b1946ac92492d2347c6235b4d2611184", out)
+
+    def test_hash_unknown_algo(self):
+        self.write_file("h.txt", "x")
+        err = self.err("hash -a md9 h.txt")
+        self.assertIn("ERR", err)
+
+    def test_hash_missing_file(self):
+        err = self.err("hash nope.txt")
+        self.assertIn("ERR", err)
+
+    def test_hash_pipe_stdin(self):
+        self.write_file("h.txt", "hello\n")
+        out = self.out("cat h.txt | hash")
+        self.assertEqual(
+            out.strip(),
+            "5891b5b522d5df086d0ff0b110fbd9d21bb4fc7163af34d08286a2e846f6be03",
+        )
+
+
 # ═════════════════════════════════════════════════════════════════════════════
 # 7. File operations: cp, mv, rm, touch, mkdir, rmdir
 # ═════════════════════════════════════════════════════════════════════════════
