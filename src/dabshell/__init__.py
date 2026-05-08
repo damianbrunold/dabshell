@@ -281,11 +281,13 @@ class RawInput:
 
 def find_executable_(path, executable):
     fullpath = os.path.join(path, executable)
-    if IS_WIN and not os.path.exists(fullpath):
+    if IS_WIN and not os.path.isfile(fullpath):
         fullpath = os.path.join(path, executable + ".exe")
-    if not os.path.exists(fullpath):
+    if not os.path.isfile(fullpath):
         fullpath = os.path.join(path, executable + ".dsh")
-    if not os.path.exists(fullpath):
+    if not os.path.isfile(fullpath):
+        fullpath = os.path.join(path, executable + ".scm")
+    if not os.path.isfile(fullpath):
         fullpath = None
     return fullpath
 
@@ -316,7 +318,13 @@ def collect_partial_executables(path, word, results):
     for fname in os.listdir(path):
         if fname.startswith(word):
             fullpath = os.path.join(path, fname)
-            if fname.endswith(".exe") or fname.endswith(".dsh"):
+            if not os.path.isfile(fullpath):
+                continue
+            if (
+                fname.endswith(".exe")
+                or fname.endswith(".dsh")
+                or fname.endswith(".scm")
+            ):
                 fname = fname[:-4]
             elif not IS_WIN and not os.access(fullpath, os.X_OK):
                 continue
@@ -1709,6 +1717,9 @@ class Dabshell:
                 self.env.get("script").execute(self, [cmd, *args])
             finally:
                 self.current_stdin = None
+        elif cmd.endswith(".scm"):
+            script_path = cmd if os.path.isabs(cmd) else os.path.join(self.cwd, cmd)
+            self._run_external("scm", [script_path, *args], stdin_data, history)
         else:
             self._run_external(cmd, args, stdin_data, history)
 
@@ -1735,6 +1746,11 @@ class Dabshell:
                     self.env.get("script").execute(self, [executable, *args])
                 finally:
                     self.current_stdin = None
+                return
+            if executable.endswith(".scm"):
+                self._run_external(
+                    "scm", [executable, *args], stdin_data, history
+                )
                 return
 
             stdin_bytes = (
