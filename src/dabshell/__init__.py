@@ -1,3 +1,4 @@
+import collections
 import ctypes
 import datetime
 import difflib
@@ -3351,7 +3352,7 @@ class CmdGrep(Cmd):
 
     def help(self):
         return (
-            "<pattern> [-i] [-v] [-q] [<location>...]   : "
+            "<pattern> [-i] [-v] [-q] [-A <n>] [-B <n>] [-C <n>] [<location>...]   : "
             "searches the pattern in the files at location"
         )
 
@@ -3359,36 +3360,53 @@ class CmdGrep(Cmd):
         self.case_sensitive = True
         self.invert = False
         self.quiet = False
+        self.after = 0
+        self.before = 0
         args_ = []
-        for arg in args:
+        i = 0
+        while i < len(args):
+            arg = args[i]
             if arg == "-q":
                 self.quiet = True
             elif arg == "-i":
                 self.case_sensitive = False
             elif arg == "-v":
                 self.invert = True
+            elif arg in ("-A", "-B", "-C"):
+                if i + 1 >= len(args):
+                    shell.errs.print(f"grep: option {arg} requires an argument")
+                    return
+                try:
+                    n = int(args[i + 1])
+                except ValueError:
+                    shell.errs.print(f"grep: invalid value for {arg}: {args[i + 1]}")
+                    return
+                if n < 0:
+                    shell.errs.print(f"grep: {arg} requires a non-negative integer")
+                    return
+                if arg == "-A":
+                    self.after = n
+                elif arg == "-B":
+                    self.before = n
+                else:
+                    self.after = n
+                    self.before = n
+                i += 1
             else:
                 args_.append(arg)
+            i += 1
+        if not args_:
+            shell.errs.print("grep: missing pattern")
+            return
         pattern = args_[0]
         locations = args_[1:]
         # If no locations given and we have piped stdin, grep that instead
         if not locations and shell.current_stdin is not None:
             try:
-                for linenr, line in enumerate(shell.current_stdin, 1):
-                    line_stripped = line.rstrip("\n").rstrip("\r")
-                    if self.case_sensitive:
-                        match = re.match(f".*({pattern})", line_stripped)
-                    else:
-                        match = re.match(
-                            f".*({pattern.lower()})", line_stripped.lower()
-                        )
-                    if self.invert:
-                        match = not match
-                    if match:
-                        if self.quiet:
-                            shell.outs.print(line_stripped)
-                        else:
-                            shell.outs.print(f"{linenr}: {line_stripped}")
+                lines = (
+                    line.rstrip("\n").rstrip("\r") for line in shell.current_stdin
+                )
+                self._grep_lines(shell, pattern, lines, label=None, multi=False)
             except KeyboardInterrupt:
                 pass
             return
@@ -3398,36 +3416,75 @@ class CmdGrep(Cmd):
             files = []
             for path in self.walk(shell.cwd, locations):
                 files.append(path)
+            multi = len(files) > 1
             for path in files:
-                self.grep(shell, pattern, path, len(files) == 1)
+                self.grep(shell, pattern, path, multi)
         except KeyboardInterrupt:
             pass
 
-    def grep(self, shell, pattern, filepath, single_file):
+    def _matches(self, pattern, line):
+        if self.case_sensitive:
+            m = re.match(f".*({pattern})", line)
+        else:
+            m = re.match(f".*({pattern.lower()})", line.lower())
+        return bool(m) ^ self.invert
+
+    def _format(self, label, linenr, line, is_match):
+        if self.quiet:
+            return line
+        sep = ":" if is_match else "-"
+        if label is None:
+            return f"{linenr}{sep} {line}"
+        return f"{label} {linenr}{sep} {line}"
+
+    def _grep_lines(self, shell, pattern, lines, label, multi):
+        # Ring buffer of (linenr, line) for pre-context.
+        before_buf = collections.deque(maxlen=self.before) if self.before else None
+        after_remaining = 0
+        last_emitted = 0  # 0 means nothing emitted yet
+        any_context = self.before > 0 or self.after > 0
+        for linenr, line in enumerate(lines, 1):
+            is_match = self._matches(pattern, line)
+            if is_match:
+                # Emit separator if there's a gap to previously emitted output.
+                if any_context and last_emitted > 0:
+                    pre_start = (
+                        before_buf[0][0] if before_buf else linenr
+                    )
+                    if pre_start > last_emitted + 1:
+                        shell.outs.print("--")
+                # Emit pre-context lines not already emitted.
+                if before_buf:
+                    for bnr, bline in before_buf:
+                        if bnr > last_emitted:
+                            shell.outs.print(
+                                self._format(label, bnr, bline.strip(), False)
+                            )
+                            last_emitted = bnr
+                shell.outs.print(
+                    self._format(label, linenr, line.strip(), True)
+                )
+                last_emitted = linenr
+                after_remaining = self.after
+            elif after_remaining > 0:
+                shell.outs.print(
+                    self._format(label, linenr, line.strip(), False)
+                )
+                last_emitted = linenr
+                after_remaining -= 1
+            if before_buf is not None:
+                before_buf.append((linenr, line))
+
+    def grep(self, shell, pattern, filepath, multi):
         if not os.path.exists(filepath):
             return
         if filepath.startswith(shell.cwd):
             relpath = filepath[len(shell.cwd)+1:]
         else:
             relpath = filepath
+        label = relpath if multi else None
         with open(filepath, encoding="utf8", errors="ignore") as infile:
-            linenr = 1
-            for line in infile:
-                if self.case_sensitive:
-                    match = re.match(f".*({pattern})", line)
-                else:
-                    match = re.match(f".*({pattern.lower()})", line.lower())
-                if self.invert:
-                    match = not match
-                if match:
-                    line = line.strip()
-                    if self.quiet:
-                        shell.outs.print(line)
-                    elif single_file:
-                        shell.outs.print(f"{linenr}: {line}")
-                    else:
-                        shell.outs.print(f"{relpath} {linenr}: {line}")
-                linenr += 1
+            self._grep_lines(shell, pattern, infile, label=label, multi=multi)
 
     def walk(self, cwd, locations):
         for location in locations:

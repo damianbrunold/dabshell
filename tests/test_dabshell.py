@@ -866,6 +866,55 @@ class TestGrepWcDiff(ShellTestCase):
         out = self.out("grep zzz a.txt")
         self.assertEqual(out, "")
 
+    def test_grep_after_context(self):
+        self.write_file("c.txt", "alpha\nbeta\nMATCH\ngamma\ndelta\nepsilon\n")
+        out = self.out("grep -A 2 MATCH c.txt")
+        self.assertIn("3: MATCH", out)
+        self.assertIn("4- gamma", out)
+        self.assertIn("5- delta", out)
+        self.assertNotIn("epsilon", out)
+        self.assertNotIn("beta", out)
+
+    def test_grep_before_context(self):
+        self.write_file("c.txt", "alpha\nbeta\nMATCH\ngamma\n")
+        out = self.out("grep -B 2 MATCH c.txt")
+        self.assertIn("1- alpha", out)
+        self.assertIn("2- beta", out)
+        self.assertIn("3: MATCH", out)
+        self.assertNotIn("gamma", out)
+
+    def test_grep_around_context(self):
+        self.write_file("c.txt", "a\nb\nMATCH\nc\nd\n")
+        out = self.out("grep -C 1 MATCH c.txt")
+        self.assertIn("2- b", out)
+        self.assertIn("3: MATCH", out)
+        self.assertIn("4- c", out)
+        self.assertNotIn("1- a", out)
+        self.assertNotIn("5- d", out)
+
+    def test_grep_context_separator_between_groups(self):
+        # Two matches far apart get a "--" separator between context groups.
+        lines = ["MATCH1"] + ["x"] * 10 + ["MATCH2"]
+        self.write_file("c.txt", "\n".join(lines) + "\n")
+        out = self.out("grep -A 1 MATCH c.txt")
+        self.assertIn("--", out)
+
+    def test_grep_context_merges_overlapping(self):
+        # Two close matches: contexts should merge with no separator and no
+        # duplicated lines.
+        self.write_file("c.txt", "MATCH1\nx\ny\nMATCH2\n")
+        out = self.out("grep -C 2 MATCH c.txt")
+        self.assertNotIn("--", out)
+        # 'x' should appear exactly once.
+        self.assertEqual(out.count("2- x"), 1)
+
+    def test_grep_context_via_pipe(self):
+        self.write_file("data.txt", "alpha\nbeta\nMATCH\ngamma\n")
+        out = self.out("cat data.txt | grep -B 1 -A 1 MATCH")
+        self.assertIn("2- beta", out)
+        self.assertIn("3: MATCH", out)
+        self.assertIn("4- gamma", out)
+
     def test_wc_counts_lines(self):
         out = self.out("wc a.txt")
         self.assertIn("3", out)
