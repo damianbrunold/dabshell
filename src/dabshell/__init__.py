@@ -853,6 +853,7 @@ class Dabshell:
             self.init_cmd(CmdCat())
             self.init_cmd(CmdHead())
             self.init_cmd(CmdTail())
+            self.init_cmd(CmdLines())
             self.init_cmd(CmdWc())
             self.init_cmd(CmdDiff())
             self.init_cmd(CmdEcho())
@@ -2956,6 +2957,156 @@ class CmdHead(Cmd):
                             shell.outs.write(line.decode(encoding))
                         except Exception:
                             pass
+
+
+class CmdLines(Cmd):
+    def __init__(self):
+        Cmd.__init__(self, "lines")
+
+    def help(self):
+        return (
+            "<range> [<file> ...]   : prints the selected line range. "
+            "Range is 1-based and inclusive: N, N:M, :M, N:, :. "
+            "Negative indices count from the end (e.g. -10: for the last 10 lines)."
+        )
+
+    def execute(self, shell, args):
+        if not args:
+            shell.oute.print("ERR: lines: missing range argument")
+            return
+        try:
+            start, end = self._parse_range(args[0])
+        except ValueError as e:
+            shell.oute.print(f"ERR: lines: {e}")
+            return
+        filenames = args[1:]
+
+        files = []
+        for filename in filenames:
+            if not os.path.isabs(filename):
+                filename = shell.canon(os.path.join(shell.cwd, filename))
+            allfiles = sorted(glob.glob(filename))
+            if allfiles:
+                files.extend(allfiles)
+            else:
+                files.append(filename)
+
+        if not files and shell.current_stdin is not None:
+            self._emit_from_iter(shell, shell.current_stdin, start, end)
+            return
+
+        for filename in files:
+            if not os.path.exists(filename):
+                shell.oute.print(f"ERR: {filename} not found")
+                continue
+            if os.path.isdir(filename):
+                shell.oute.print(f"ERR: {filename}: is a directory")
+                continue
+            with open(filename, "rb") as infile:
+                self._emit_from_binary(shell, infile, start, end)
+
+    def _parse_range(self, spec):
+        """Parse a range spec into (start, end), 1-based inclusive.
+
+        Either bound may be None (open) or negative (from end).
+        """
+        if ":" in spec:
+            lhs, rhs = spec.split(":", 1)
+            start = self._parse_bound(lhs) if lhs else None
+            end = self._parse_bound(rhs) if rhs else None
+        else:
+            n = self._parse_bound(spec)
+            start = end = n
+        if start == 0 or end == 0:
+            raise ValueError(f"line numbers are 1-based: {spec!r}")
+        return start, end
+
+    def _parse_bound(self, s):
+        try:
+            return int(s)
+        except ValueError:
+            raise ValueError(f"invalid range component {s!r}")
+
+    def _resolve(self, start, end, total):
+        """Resolve possibly-negative/None bounds to concrete 1-based inclusive
+        ints, clamped to [1, total]. Returns (lo, hi) with lo <= hi, or None
+        if the range is empty."""
+        def fix(b, default):
+            if b is None:
+                return default
+            if b < 0:
+                return total + 1 + b
+            return b
+        lo = fix(start, 1)
+        hi = fix(end, total)
+        lo = max(1, lo)
+        hi = min(total, hi)
+        if lo > hi or total == 0:
+            return None
+        return lo, hi
+
+    def _needs_buffering(self, start, end):
+        return (
+            end is None
+            or (start is not None and start < 0)
+            or (end is not None and end < 0)
+        )
+
+    def _emit_from_binary(self, shell, infile, start, end):
+        encoding = "utf8"
+        if not self._needs_buffering(start, end):
+            # Stream until we've passed `end`.
+            target_end = end
+            target_start = start if start is not None else 1
+            linenr = 0
+            for raw in infile:
+                linenr += 1
+                if linenr < target_start:
+                    continue
+                if linenr > target_end:
+                    break
+                encoding = self._write_line(shell, raw, encoding)
+            return
+        lines = infile.readlines()
+        resolved = self._resolve(start, end, len(lines))
+        if resolved is None:
+            return
+        lo, hi = resolved
+        for raw in lines[lo-1:hi]:
+            encoding = self._write_line(shell, raw, encoding)
+
+    def _emit_from_iter(self, shell, stdin, start, end):
+        if not self._needs_buffering(start, end):
+            target_start = start if start is not None else 1
+            target_end = end
+            linenr = 0
+            for line in stdin:
+                linenr += 1
+                if linenr < target_start:
+                    continue
+                if linenr > target_end:
+                    break
+                shell.outs.write(line)
+            return
+        all_lines = list(stdin)
+        resolved = self._resolve(start, end, len(all_lines))
+        if resolved is None:
+            return
+        lo, hi = resolved
+        for line in all_lines[lo-1:hi]:
+            shell.outs.write(line)
+
+    def _write_line(self, shell, raw, encoding):
+        try:
+            shell.outs.write(raw.decode(encoding))
+            return encoding
+        except Exception:
+            other = "Latin1" if encoding == "utf8" else "utf8"
+            try:
+                shell.outs.write(raw.decode(other))
+                return other
+            except Exception:
+                return encoding
 
 
 class CmdEcho(Cmd):

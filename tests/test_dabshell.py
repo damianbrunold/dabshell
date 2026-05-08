@@ -829,6 +829,62 @@ class TestCatHeadTail(ShellTestCase):
         expected = b"".join(f"line{i:05d}\n".encode() for i in range(1996, 2001))
         self.assertEqual(result, expected)
 
+    # lines
+
+    def test_lines_single(self):
+        out = self.out("lines 3 twenty.txt")
+        self.assertEqual(out.strip().splitlines(), ["line3"])
+
+    def test_lines_range(self):
+        out = self.out("lines 5:8 twenty.txt")
+        self.assertEqual(
+            out.strip().splitlines(), ["line5", "line6", "line7", "line8"]
+        )
+
+    def test_lines_open_start(self):
+        out = self.out("lines :3 twenty.txt")
+        self.assertEqual(out.strip().splitlines(), ["line1", "line2", "line3"])
+
+    def test_lines_open_end(self):
+        out = self.out("lines 18: twenty.txt")
+        self.assertEqual(
+            out.strip().splitlines(), ["line18", "line19", "line20"]
+        )
+
+    def test_lines_negative_tail(self):
+        out = self.out("lines -3: twenty.txt")
+        self.assertEqual(
+            out.strip().splitlines(), ["line18", "line19", "line20"]
+        )
+
+    def test_lines_negative_single(self):
+        out = self.out("lines -1 twenty.txt")
+        self.assertEqual(out.strip().splitlines(), ["line20"])
+
+    def test_lines_out_of_range_clamped(self):
+        out = self.out("lines 18:50 twenty.txt")
+        self.assertEqual(
+            out.strip().splitlines(), ["line18", "line19", "line20"]
+        )
+
+    def test_lines_empty_range(self):
+        out = self.out("lines 50:60 twenty.txt")
+        self.assertEqual(out, "")
+
+    def test_lines_zero_rejected(self):
+        err = self.err("lines 0 twenty.txt")
+        self.assertIn("ERR", err)
+
+    def test_lines_via_pipe(self):
+        out = self.out("cat twenty.txt | lines 2:4")
+        self.assertEqual(
+            out.strip().splitlines(), ["line2", "line3", "line4"]
+        )
+
+    def test_lines_negative_via_pipe(self):
+        out = self.out("cat twenty.txt | lines -2:")
+        self.assertEqual(out.strip().splitlines(), ["line19", "line20"])
+
 
 # ═════════════════════════════════════════════════════════════════════════════
 # 9. grep, wc, diff
