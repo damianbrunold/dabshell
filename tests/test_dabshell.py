@@ -1058,6 +1058,112 @@ class TestFetch(ShellTestCase):
         self.assertIn("ERR", err)
 
 
+class TestArchives(ShellTestCase):
+
+    def setUp(self):
+        super().setUp()
+        os.mkdir(os.path.join(self.tmpdir, "src"))
+        self.write_file("src/a.txt", "alpha")
+        self.write_file("src/b.txt", "beta")
+
+    # tar
+
+    def test_tar_create_list_extract(self):
+        self.run_cmd("tar -c bundle.tar src")
+        archive = os.path.join(self.tmpdir, "bundle.tar")
+        self.assertTrue(os.path.exists(archive))
+        out = self.out("tar -t bundle.tar")
+        self.assertIn("src/a.txt", out.replace("\\", "/"))
+        os.mkdir(os.path.join(self.tmpdir, "out"))
+        self.run_cmd("tar -x bundle.tar -C out")
+        self.assertTrue(
+            os.path.exists(os.path.join(self.tmpdir, "out", "src", "a.txt"))
+        )
+
+    def test_tar_gzip(self):
+        self.run_cmd("tar -c bundle.tar.gz src")
+        archive = os.path.join(self.tmpdir, "bundle.tar.gz")
+        self.assertTrue(os.path.exists(archive))
+        # validate it's actually gzipped: starts with 1F 8B
+        with open(archive, "rb") as f:
+            self.assertEqual(f.read(2), b"\x1f\x8b")
+
+    def test_tar_missing_mode(self):
+        err = self.err("tar bundle.tar")
+        self.assertIn("ERR", err)
+
+    # zip
+
+    def test_zip_create_list_extract(self):
+        self.run_cmd("zip -c bundle.zip src")
+        archive = os.path.join(self.tmpdir, "bundle.zip")
+        self.assertTrue(os.path.exists(archive))
+        out = self.out("zip -t bundle.zip")
+        self.assertIn("src/a.txt", out.replace("\\", "/"))
+        os.mkdir(os.path.join(self.tmpdir, "out"))
+        self.run_cmd("zip -x bundle.zip -C out")
+        self.assertTrue(
+            os.path.exists(os.path.join(self.tmpdir, "out", "src", "a.txt"))
+        )
+
+    # open
+
+    def test_open_missing_file(self):
+        err = self.err("open nope.txt")
+        self.assertIn("ERR", err)
+
+    def test_open_invokes_handler(self):
+        self.write_file("hello.txt", "x")
+        import subprocess as _sp
+        calls = []
+        orig_popen = _sp.Popen
+        def fake_popen(cmd, *a, **kw):
+            calls.append(cmd)
+            class _Stub:
+                def __init__(self): pass
+            return _Stub()
+        _sp.Popen = fake_popen
+        # Patch os.startfile on Windows similarly
+        import os as _os
+        had_startfile = hasattr(_os, "startfile")
+        if had_startfile:
+            orig_startfile = _os.startfile
+            _os.startfile = lambda p: calls.append(["startfile", p])
+        try:
+            self.run_cmd("open hello.txt")
+            self.assertTrue(calls, "expected an OS open call to be invoked")
+        finally:
+            _sp.Popen = orig_popen
+            if had_startfile:
+                _os.startfile = orig_startfile
+
+
+class TestLess(ShellTestCase):
+
+    def test_less_short_file_prints_directly(self):
+        # When content fits on screen, no paging is needed.
+        self.write_file("short.txt", "one\ntwo\nthree\n")
+        out = self.out("less short.txt")
+        self.assertIn("one", out)
+        self.assertIn("three", out)
+
+    def test_less_missing_file(self):
+        err = self.err("less nope.txt")
+        self.assertIn("ERR", err)
+
+    def test_less_pager_quits_on_q(self):
+        # Force a long file that requires paging, then feed 'q' to quit.
+        big = "\n".join(f"line{i}" for i in range(200)) + "\n"
+        self.write_file("big.txt", big)
+        # Replace shell.inp with a stub that returns 'q' immediately.
+        class _StubInp:
+            def getch(self_inp):
+                return "q"
+        self.shell.inp = _StubInp()
+        # Should not hang, should not raise.
+        self.run_cmd("less big.txt")
+
+
 # ═════════════════════════════════════════════════════════════════════════════
 # 7. File operations: cp, mv, rm, touch, mkdir, rmdir
 # ═════════════════════════════════════════════════════════════════════════════

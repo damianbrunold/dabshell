@@ -868,6 +868,10 @@ class Dabshell:
             self.init_cmd(CmdHash())
             self.init_cmd(CmdJson())
             self.init_cmd(CmdFetch())
+            self.init_cmd(CmdTar())
+            self.init_cmd(CmdZip())
+            self.init_cmd(CmdOpen())
+            self.init_cmd(CmdLess())
             self.init_cmd(CmdCp())
             self.init_cmd(CmdMv())
             self.init_cmd(CmdRm())
@@ -4596,6 +4600,331 @@ class CmdFetch(Cmd):
                         shell.outs.write(data.decode("latin1"))
         except Exception as e:
             shell.oute.print(f"ERR: fetch: {e}")
+
+
+class CmdTar(Cmd):
+    def __init__(self):
+        Cmd.__init__(self, "tar")
+
+    def help(self):
+        return (
+            "(-c|-x|-t) <archive> [-C <dir>] [<file>...]"
+            "   : create, extract, or list a tar archive "
+            "(compression auto-detected by extension)"
+        )
+
+    def execute(self, shell, args):
+        mode = None
+        archive = None
+        chdir = None
+        members = []
+        idx = 0
+        while idx < len(args):
+            arg = args[idx]
+            if arg in ("-c", "-x", "-t"):
+                if mode is not None:
+                    shell.oute.print("ERR: tar: specify exactly one of -c/-x/-t")
+                    return
+                mode = arg
+                idx += 1
+                continue
+            if arg == "-C":
+                if idx + 1 >= len(args):
+                    shell.oute.print("ERR: tar: -C requires an argument")
+                    return
+                chdir = args[idx + 1]
+                idx += 2
+                continue
+            if arg.startswith("-"):
+                shell.oute.print(f"ERR: tar: unknown option {arg!r}")
+                return
+            if archive is None:
+                archive = arg
+            else:
+                members.append(arg)
+            idx += 1
+
+        if mode is None or archive is None:
+            shell.oute.print("ERR: tar: missing mode or archive")
+            return
+
+        if not os.path.isabs(archive):
+            archive_abs = shell.canon(os.path.join(shell.cwd, archive))
+        else:
+            archive_abs = archive
+
+        compression = self._compression(archive)
+        import tarfile as _tar
+        try:
+            if mode == "-c":
+                if not members:
+                    shell.oute.print("ERR: tar: -c requires at least one file")
+                    return
+                with _tar.open(archive_abs, f"w:{compression}") as tf:
+                    for m in members:
+                        m_abs = (
+                            m if os.path.isabs(m)
+                            else os.path.join(shell.cwd, m)
+                        )
+                        tf.add(m_abs, arcname=m)
+            elif mode == "-t":
+                with _tar.open(archive_abs, f"r:{compression}") as tf:
+                    for m in tf.getmembers():
+                        shell.outs.print(m.name)
+            else:  # -x
+                dest = chdir if chdir is not None else "."
+                if not os.path.isabs(dest):
+                    dest = shell.canon(os.path.join(shell.cwd, dest))
+                os.makedirs(dest, exist_ok=True)
+                with _tar.open(archive_abs, f"r:{compression}") as tf:
+                    self._safe_extract(tf, dest)
+        except Exception as e:
+            shell.oute.print(f"ERR: tar: {e}")
+
+    def _compression(self, archive):
+        low = archive.lower()
+        if low.endswith(".tar.gz") or low.endswith(".tgz"):
+            return "gz"
+        if low.endswith(".tar.bz2") or low.endswith(".tbz2"):
+            return "bz2"
+        if low.endswith(".tar.xz") or low.endswith(".txz"):
+            return "xz"
+        return ""
+
+    def _safe_extract(self, tf, dest):
+        dest = os.path.realpath(dest)
+        for member in tf.getmembers():
+            target = os.path.realpath(os.path.join(dest, member.name))
+            if not target.startswith(dest + os.sep) and target != dest:
+                raise RuntimeError(
+                    f"refusing to extract outside dest: {member.name}"
+                )
+        try:
+            tf.extractall(dest, filter="data")
+        except TypeError:
+            tf.extractall(dest)
+
+
+class CmdZip(Cmd):
+    def __init__(self):
+        Cmd.__init__(self, "zip")
+
+    def help(self):
+        return (
+            "(-c|-x|-t) <archive> [-C <dir>] [<file>...]"
+            "   : create, extract, or list a zip archive"
+        )
+
+    def execute(self, shell, args):
+        mode = None
+        archive = None
+        chdir = None
+        members = []
+        idx = 0
+        while idx < len(args):
+            arg = args[idx]
+            if arg in ("-c", "-x", "-t"):
+                if mode is not None:
+                    shell.oute.print("ERR: zip: specify exactly one of -c/-x/-t")
+                    return
+                mode = arg
+                idx += 1
+                continue
+            if arg == "-C":
+                if idx + 1 >= len(args):
+                    shell.oute.print("ERR: zip: -C requires an argument")
+                    return
+                chdir = args[idx + 1]
+                idx += 2
+                continue
+            if arg.startswith("-"):
+                shell.oute.print(f"ERR: zip: unknown option {arg!r}")
+                return
+            if archive is None:
+                archive = arg
+            else:
+                members.append(arg)
+            idx += 1
+
+        if mode is None or archive is None:
+            shell.oute.print("ERR: zip: missing mode or archive")
+            return
+
+        if not os.path.isabs(archive):
+            archive_abs = shell.canon(os.path.join(shell.cwd, archive))
+        else:
+            archive_abs = archive
+
+        import zipfile as _zip
+        try:
+            if mode == "-c":
+                if not members:
+                    shell.oute.print("ERR: zip: -c requires at least one file")
+                    return
+                with _zip.ZipFile(
+                    archive_abs, "w", _zip.ZIP_DEFLATED
+                ) as zf:
+                    for m in members:
+                        m_abs = (
+                            m if os.path.isabs(m)
+                            else os.path.join(shell.cwd, m)
+                        )
+                        if os.path.isdir(m_abs):
+                            for dirpath, _, filenames in os.walk(m_abs):
+                                for fn in filenames:
+                                    full = os.path.join(dirpath, fn)
+                                    arc = os.path.relpath(
+                                        full, os.path.dirname(m_abs)
+                                    )
+                                    zf.write(full, arcname=arc)
+                        else:
+                            zf.write(m_abs, arcname=m)
+            elif mode == "-t":
+                with _zip.ZipFile(archive_abs, "r") as zf:
+                    for name in zf.namelist():
+                        shell.outs.print(name)
+            else:  # -x
+                dest = chdir if chdir is not None else "."
+                if not os.path.isabs(dest):
+                    dest = shell.canon(os.path.join(shell.cwd, dest))
+                os.makedirs(dest, exist_ok=True)
+                with _zip.ZipFile(archive_abs, "r") as zf:
+                    self._safe_extract(zf, dest)
+        except Exception as e:
+            shell.oute.print(f"ERR: zip: {e}")
+
+    def _safe_extract(self, zf, dest):
+        dest_real = os.path.realpath(dest)
+        for name in zf.namelist():
+            target = os.path.realpath(os.path.join(dest_real, name))
+            if (
+                not target.startswith(dest_real + os.sep)
+                and target != dest_real
+            ):
+                raise RuntimeError(f"refusing to extract outside dest: {name}")
+        zf.extractall(dest)
+
+
+class CmdOpen(Cmd):
+    def __init__(self):
+        Cmd.__init__(self, "open")
+
+    def help(self):
+        return (
+            "<file_or_url>"
+            "   : opens a file or URL with the OS default handler"
+        )
+
+    def execute(self, shell, args):
+        if not args:
+            shell.oute.print("ERR: open: missing argument")
+            return
+        target = args[0]
+        if "://" not in target:
+            if not os.path.isabs(target):
+                target = shell.canon(os.path.join(shell.cwd, target))
+            if not os.path.exists(target):
+                shell.oute.print(f"ERR: open: {args[0]} not found")
+                return
+        try:
+            if IS_WIN:
+                os.startfile(target)  # type: ignore[attr-defined]
+            elif platform.system() == "Darwin":
+                subprocess.Popen(["open", target])
+            else:
+                subprocess.Popen(["xdg-open", target])
+        except Exception as e:
+            shell.oute.print(f"ERR: open: {e}")
+
+
+class CmdLess(Cmd):
+    def __init__(self):
+        Cmd.__init__(self, "less")
+
+    def help(self):
+        return (
+            "[<file>]"
+            "   : pages through file or stdin (space=page, j/k=line, g/G=top/bottom, q=quit)"
+        )
+
+    def execute(self, shell, args):
+        if args:
+            fn = args[0]
+            if not os.path.isabs(fn):
+                fn = shell.canon(os.path.join(shell.cwd, fn))
+            if not os.path.exists(fn):
+                shell.oute.print(f"ERR: {args[0]} not found")
+                return
+            if os.path.isdir(fn):
+                shell.oute.print(f"ERR: {args[0]}: is a directory")
+                return
+            with open(fn, encoding="utf8", errors="replace") as f:
+                lines = [l.rstrip("\n").rstrip("\r") for l in f]
+        elif shell.current_stdin is not None:
+            lines = [
+                l.rstrip("\n").rstrip("\r") for l in shell.current_stdin
+            ]
+        else:
+            shell.oute.print("ERR: less: no input")
+            return
+
+        term = shutil.get_terminal_size()
+        rows = max(2, term.lines - 1)
+        cols = term.columns
+        total = len(lines)
+        top = 0
+
+        def draw():
+            if _VT_ENABLED:
+                shell.outs.write("\033[2J\033[H")
+            visible = lines[top:top + rows]
+            for line in visible:
+                shell.outs.write(line[:cols] + "\n")
+            pct = 100 if total <= rows else int(
+                100 * min(top + rows, total) / total
+            )
+            status = f":  lines {top + 1}-{min(top + rows, total)}/{total} ({pct}%)  q to quit"
+            shell.outs.write(status[:cols])
+
+        # If everything fits, just print and return.
+        if total <= rows:
+            for line in lines:
+                shell.outs.print(line[:cols])
+            return
+
+        try:
+            while True:
+                draw()
+                key = shell.inp.getch()
+                if key is None:
+                    continue
+                if key in ("q", "Q", "\x03", "\x04"):
+                    break
+                elif key == " ":
+                    top = min(total - rows, top + rows)
+                elif key == "b":
+                    top = max(0, top - rows)
+                elif key in ("j", "\r", "\n"):
+                    top = min(total - rows, top + 1)
+                elif key == "k":
+                    top = max(0, top - 1)
+                elif key == "g":
+                    top = 0
+                elif key == "G":
+                    top = max(0, total - rows)
+                elif key == "ARROW_DOWN":
+                    top = min(total - rows, top + 1)
+                elif key == "ARROW_UP":
+                    top = max(0, top - 1)
+                elif key == "PAGE_DOWN":
+                    top = min(total - rows, top + rows)
+                elif key == "PAGE_UP":
+                    top = max(0, top - rows)
+        finally:
+            if _VT_ENABLED:
+                shell.outs.write("\033[2J\033[H")
+            else:
+                shell.outs.write("\n")
 
 
 class CmdDate(Cmd):
