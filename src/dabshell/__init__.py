@@ -1693,6 +1693,17 @@ class Dabshell:
             for fo in to_close:
                 fo.close()
 
+    def _resolve_scm_runner(self):
+        """Resolve the 'scm' runner, honoring an alias if one is defined.
+
+        Returns (command, extra_args) where extra_args precede the script path.
+        """
+        entry = self.env.get("scm")
+        if isinstance(entry, CmdAliasDefinition):
+            cmd, args = split_command(entry.value, self)
+            return cmd, args
+        return "scm", []
+
     def _dispatch_stage(self, stage, stdin_data, history):
         """Resolve aliases and dispatch a single stage to the right handler."""
         if not stage.raw:
@@ -1733,7 +1744,10 @@ class Dabshell:
                 self.current_stdin = None
         elif cmd.endswith(".scm"):
             script_path = cmd if os.path.isabs(cmd) else os.path.join(self.cwd, cmd)
-            self._run_external("scm", [script_path, *args], stdin_data, history)
+            scm_cmd, scm_args = self._resolve_scm_runner()
+            self._run_external(
+                scm_cmd, [*scm_args, script_path, *args], stdin_data, history
+            )
         else:
             self._run_external(cmd, args, stdin_data, history)
 
@@ -1762,8 +1776,9 @@ class Dabshell:
                     self.current_stdin = None
                 return
             if executable.endswith(".scm"):
+                scm_cmd, scm_args = self._resolve_scm_runner()
                 self._run_external(
-                    "scm", [executable, *args], stdin_data, history
+                    scm_cmd, [*scm_args, executable, *args], stdin_data, history
                 )
                 return
 
