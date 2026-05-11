@@ -1748,6 +1748,20 @@ class Dabshell:
             self._run_external(
                 scm_cmd, [*scm_args, script_path, *args], stdin_data, history
             )
+        elif not args and os.path.isdir(
+            cmd if os.path.isabs(cmd) else os.path.join(self.cwd, cmd)
+        ):
+            ls = self.env.get("ls")
+            if isinstance(ls, Cmd):
+                self.current_stdin = (
+                    StringInput(stdin_data) if stdin_data is not None else None
+                )
+                try:
+                    ls.execute(self, [cmd])
+                finally:
+                    self.current_stdin = None
+            else:
+                self._run_external("ls", [cmd], stdin_data, history)
         else:
             self._run_external(cmd, args, stdin_data, history)
 
