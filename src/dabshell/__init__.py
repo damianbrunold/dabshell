@@ -503,11 +503,13 @@ def _tokenize_unquoted(s):
     tokens = []
     current = []
     current_quoted = False
+    current_squoted = False
     in_quote = False
+    in_squote = False
     i = 0
     while i < len(s):
         ch = s[i]
-        if ch == '"' and not in_quote:
+        if ch == '"' and not in_quote and not in_squote:
             in_quote = True
             current_quoted = True
         elif ch == '"' and in_quote:
@@ -516,16 +518,23 @@ def _tokenize_unquoted(s):
             current.append(s[i+1])
             i += 2
             continue
-        elif ch == ' ' and not in_quote:
+        elif ch == "'" and not in_quote and not in_squote:
+            in_squote = True
+            current_quoted = True
+            current_squoted = True
+        elif ch == "'" and in_squote:
+            in_squote = False
+        elif ch == ' ' and not in_quote and not in_squote:
             if current or current_quoted:
-                tokens.append((''.join(current), current_quoted))
+                tokens.append((''.join(current), current_quoted, current_squoted))
                 current = []
                 current_quoted = False
+                current_squoted = False
         else:
             current.append(ch)
         i += 1
     if current or current_quoted:
-        tokens.append((''.join(current), current_quoted))
+        tokens.append((''.join(current), current_quoted, current_squoted))
     return tokens
 
 
@@ -537,16 +546,23 @@ def _split_pipe(s):
     stages = []
     current = []
     in_quote = False
+    in_squote = False
     i = 0
     while i < len(s):
         ch = s[i]
-        if ch == '"' and not in_quote:
+        if ch == '"' and not in_quote and not in_squote:
             in_quote = True
             current.append(ch)
         elif ch == '"' and in_quote:
             in_quote = False
             current.append(ch)
-        elif not in_quote and ch == '|':
+        elif ch == "'" and not in_quote and not in_squote:
+            in_squote = True
+            current.append(ch)
+        elif ch == "'" and in_squote:
+            in_squote = False
+            current.append(ch)
+        elif not in_quote and not in_squote and ch == '|':
             # peek ahead: || is boolean-OR (reserved), not a pipe
             if i + 1 < len(s) and s[i + 1] == '|':
                 # keep both characters as-is
@@ -585,9 +601,13 @@ def _parse_redirects(raw):
     kept = []
     i = 0
     while i < len(tokens):
-        tok, tok_quoted = tokens[i]
+        tok, tok_quoted, tok_squoted = tokens[i]
         if tok_quoted:
-            kept.append(quote_arg(tok))   # re-quote so split_command sees one token
+            if tok_squoted and "'" not in tok:
+                # Preserve single-quote semantics (no var expansion downstream)
+                kept.append("'" + tok + "'")
+            else:
+                kept.append(quote_arg(tok))
             i += 1
             continue
         matched_op = None
@@ -596,7 +616,7 @@ def _parse_redirects(raw):
                 matched_op = op
                 break
         if matched_op and i + 1 < len(tokens):
-            filename, _ = tokens[i + 1]
+            filename, _, _ = tokens[i + 1]
             if matched_op == "&>>":
                 stage.both_file   = filename
                 stage.both_append = True
@@ -872,6 +892,7 @@ class Dabshell:
             self.init_cmd(CmdSort())
             self.init_cmd(CmdUniq())
             self.init_cmd(CmdCut())
+            self.init_cmd(CmdAwk())
             self.init_cmd(CmdTee())
             self.init_cmd(CmdFind())
             self.init_cmd(CmdHash())
@@ -1564,17 +1585,25 @@ class Dabshell:
             parts = []
             current = ""
             in_quote = False
+            in_squote = False
             i = 0
             while i < len(line):
                 ch = line[i]
-                if ch == '"' and not in_quote:
+                if ch == '"' and not in_quote and not in_squote:
                     in_quote = True
                     current += ch
                 elif ch == '"' and in_quote:
                     in_quote = False
                     current += ch
+                elif ch == "'" and not in_quote and not in_squote:
+                    in_squote = True
+                    current += ch
+                elif ch == "'" and in_squote:
+                    in_squote = False
+                    current += ch
                 elif (
                     not in_quote
+                    and not in_squote
                     and ch == "&"
                     and i + 1 < len(line)
                     and line[i + 1] == "&"
@@ -4215,6 +4244,748 @@ class CmdCut(Cmd):
         if not result:
             raise ValueError("empty range list")
         return result
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# awk: a small subset (no arrays, no loops, no user functions)
+# ─────────────────────────────────────────────────────────────────────────────
+
+_AWK_KEYWORDS = {"BEGIN", "END", "if", "else", "next", "print", "printf"}
+
+
+def _awk_lex(src):
+    tokens = []
+    i = 0
+    n = len(src)
+    expect_regex = True
+    while i < n:
+        ch = src[i]
+        if ch in " \t":
+            i += 1
+            continue
+        if ch == "\n" or ch == ";":
+            tokens.append(("SEP", ch))
+            i += 1
+            expect_regex = True
+            continue
+        if ch == "#":
+            while i < n and src[i] != "\n":
+                i += 1
+            continue
+        if ch.isdigit() or (ch == "." and i + 1 < n and src[i + 1].isdigit()):
+            j = i
+            while j < n and (src[j].isdigit() or src[j] == "."):
+                j += 1
+            if j < n and src[j] in "eE":
+                j += 1
+                if j < n and src[j] in "+-":
+                    j += 1
+                while j < n and src[j].isdigit():
+                    j += 1
+            num = src[i:j]
+            try:
+                if "." in num or "e" in num or "E" in num:
+                    tokens.append(("NUM", float(num)))
+                else:
+                    tokens.append(("NUM", int(num)))
+            except ValueError:
+                tokens.append(("NUM", 0))
+            i = j
+            expect_regex = False
+            continue
+        if ch == '"':
+            j = i + 1
+            s = []
+            while j < n and src[j] != '"':
+                if src[j] == "\\" and j + 1 < n:
+                    nxt = src[j + 1]
+                    if   nxt == "n":  s.append("\n")
+                    elif nxt == "t":  s.append("\t")
+                    elif nxt == "r":  s.append("\r")
+                    elif nxt == "\\": s.append("\\")
+                    elif nxt == '"':  s.append('"')
+                    else:             s.append(nxt)
+                    j += 2
+                else:
+                    s.append(src[j])
+                    j += 1
+            if j >= n:
+                raise ValueError("unterminated string in awk program")
+            tokens.append(("STR", "".join(s)))
+            i = j + 1
+            expect_regex = False
+            continue
+        if ch == "/" and expect_regex:
+            j = i + 1
+            r = []
+            while j < n and src[j] != "/":
+                if src[j] == "\\" and j + 1 < n:
+                    r.append(src[j])
+                    r.append(src[j + 1])
+                    j += 2
+                else:
+                    r.append(src[j])
+                    j += 1
+            if j >= n:
+                raise ValueError("unterminated regex in awk program")
+            tokens.append(("REGEX", "".join(r)))
+            i = j + 1
+            expect_regex = False
+            continue
+        if ch.isalpha() or ch == "_":
+            j = i
+            while j < n and (src[j].isalnum() or src[j] == "_"):
+                j += 1
+            name = src[i:j]
+            if name in _AWK_KEYWORDS:
+                tokens.append((name, name))
+            else:
+                tokens.append(("IDENT", name))
+            i = j
+            expect_regex = False
+            continue
+        two = src[i:i + 2]
+        if two in ("==", "!=", "<=", ">=", "&&", "||", "!~",
+                   "+=", "-=", "*=", "/=", "%="):
+            tokens.append((two, two))
+            i += 2
+            expect_regex = True
+            continue
+        if ch in "+-*/%=<>!~,(){}$":
+            tokens.append((ch, ch))
+            i += 1
+            expect_regex = ch not in ")}"
+            continue
+        raise ValueError(f"unexpected character {ch!r} in awk program")
+    tokens.append(("EOF", None))
+    return tokens
+
+
+class _AwkParser:
+    def __init__(self, tokens):
+        self.toks = tokens
+        self.i = 0
+
+    def peek(self):
+        return self.toks[self.i]
+
+    def advance(self):
+        t = self.toks[self.i]
+        self.i += 1
+        return t
+
+    def accept(self, kind):
+        if self.toks[self.i][0] == kind:
+            return self.advance()
+        return None
+
+    def expect(self, kind):
+        t = self.advance()
+        if t[0] != kind:
+            raise ValueError(f"awk: expected {kind!r}, got {t[0]!r}")
+        return t
+
+    def skip_seps(self):
+        while self.peek()[0] == "SEP":
+            self.advance()
+
+    def parse_program(self):
+        rules = []
+        self.skip_seps()
+        while self.peek()[0] != "EOF":
+            rules.append(self.parse_rule())
+            self.skip_seps()
+        return ("Prog", rules)
+
+    def parse_rule(self):
+        pattern = None
+        action = None
+        t = self.peek()
+        if t[0] in ("BEGIN", "END"):
+            pattern = t[0]
+            self.advance()
+        elif t[0] != "{":
+            pattern = self.parse_expr()
+        if self.peek()[0] == "{":
+            action = self.parse_block()
+        return ("Rule", pattern, action)
+
+    def parse_block(self):
+        self.expect("{")
+        stmts = []
+        self.skip_seps()
+        while self.peek()[0] != "}":
+            stmts.append(self.parse_stmt())
+            if self.peek()[0] == "}":
+                break
+            if self.peek()[0] == "SEP":
+                self.skip_seps()
+            elif self.peek()[0] == "EOF":
+                raise ValueError("awk: unterminated block")
+            else:
+                raise ValueError(
+                    f"awk: expected ; or newline, got {self.peek()[0]!r}"
+                )
+        self.expect("}")
+        return ("Block", stmts)
+
+    def parse_stmt(self):
+        t = self.peek()
+        if t[0] == "if":
+            return self.parse_if()
+        if t[0] == "print":
+            self.advance()
+            exprs = []
+            if self.peek()[0] not in ("SEP", "}", "EOF"):
+                exprs.append(self.parse_expr())
+                while self.accept(","):
+                    exprs.append(self.parse_expr())
+            return ("Print", exprs)
+        if t[0] == "printf":
+            self.advance()
+            exprs = [self.parse_expr()]
+            while self.accept(","):
+                exprs.append(self.parse_expr())
+            return ("Printf", exprs)
+        if t[0] == "next":
+            self.advance()
+            return ("Next",)
+        if t[0] == "{":
+            return self.parse_block()
+        return ("ExprStmt", self.parse_expr())
+
+    def parse_if(self):
+        self.expect("if")
+        self.expect("(")
+        cond = self.parse_expr()
+        self.expect(")")
+        self.skip_seps()
+        then_stmt = self.parse_stmt()
+        save = self.i
+        self.skip_seps()
+        if self.peek()[0] == "else":
+            self.advance()
+            self.skip_seps()
+            else_stmt = self.parse_stmt()
+        else:
+            self.i = save
+            else_stmt = None
+        return ("If", cond, then_stmt, else_stmt)
+
+    def parse_expr(self):
+        return self.parse_assign()
+
+    def parse_assign(self):
+        lhs = self.parse_or()
+        op = self.peek()[0]
+        if op in ("=", "+=", "-=", "*=", "/=", "%="):
+            self.advance()
+            rhs = self.parse_assign()
+            return ("Assign", op, lhs, rhs)
+        return lhs
+
+    def parse_or(self):
+        left = self.parse_and()
+        while self.accept("||"):
+            left = ("BinOp", "||", left, self.parse_and())
+        return left
+
+    def parse_and(self):
+        left = self.parse_not()
+        while self.accept("&&"):
+            left = ("BinOp", "&&", left, self.parse_not())
+        return left
+
+    def parse_not(self):
+        if self.accept("!"):
+            return ("UnaryOp", "!", self.parse_not())
+        return self.parse_match()
+
+    def parse_match(self):
+        left = self.parse_compare()
+        while self.peek()[0] in ("~", "!~"):
+            op = self.advance()[0]
+            if self.peek()[0] == "REGEX":
+                rhs = ("Regex", self.advance()[1])
+            else:
+                rhs = self.parse_compare()
+            left = ("MatchOp", left, rhs, op == "!~")
+        return left
+
+    def parse_compare(self):
+        left = self.parse_concat()
+        if self.peek()[0] in ("==", "!=", "<", "<=", ">", ">="):
+            op = self.advance()[0]
+            right = self.parse_concat()
+            return ("BinOp", op, left, right)
+        return left
+
+    def parse_concat(self):
+        left = self.parse_add()
+        while self.peek()[0] in ("IDENT", "NUM", "STR", "$", "("):
+            right = self.parse_add()
+            left = ("BinOp", "concat", left, right)
+        return left
+
+    def parse_add(self):
+        left = self.parse_mul()
+        while self.peek()[0] in ("+", "-"):
+            op = self.advance()[0]
+            left = ("BinOp", op, left, self.parse_mul())
+        return left
+
+    def parse_mul(self):
+        left = self.parse_unary()
+        while self.peek()[0] in ("*", "/", "%"):
+            op = self.advance()[0]
+            left = ("BinOp", op, left, self.parse_unary())
+        return left
+
+    def parse_unary(self):
+        if self.accept("-"):
+            return ("UnaryOp", "-", self.parse_unary())
+        if self.accept("+"):
+            return self.parse_unary()
+        return self.parse_primary()
+
+    def parse_primary(self):
+        t = self.peek()
+        k = t[0]
+        if k == "NUM":
+            self.advance()
+            return ("Num", t[1])
+        if k == "STR":
+            self.advance()
+            return ("Str", t[1])
+        if k == "REGEX":
+            self.advance()
+            return ("MatchOp",
+                    ("Field", ("Num", 0)), ("Regex", t[1]), False)
+        if k == "$":
+            self.advance()
+            return ("Field", self.parse_primary())
+        if k == "(":
+            self.advance()
+            e = self.parse_expr()
+            self.expect(")")
+            return e
+        if k == "IDENT":
+            name = self.advance()[1]
+            if self.accept("("):
+                args = []
+                if self.peek()[0] != ")":
+                    args.append(self.parse_expr())
+                    while self.accept(","):
+                        args.append(self.parse_expr())
+                self.expect(")")
+                return ("Call", name, args)
+            return ("Var", name)
+        raise ValueError(f"awk: unexpected token in expression: {t[0]!r}")
+
+
+def _awk_to_num(v):
+    if isinstance(v, bool):
+        return 1 if v else 0
+    if isinstance(v, (int, float)):
+        return v
+    if isinstance(v, str):
+        s = v.strip()
+        if not s:
+            return 0
+        try:
+            f = float(s)
+            if f.is_integer() and "." not in s and "e" not in s and "E" not in s:
+                return int(f)
+            return f
+        except ValueError:
+            return 0
+    return 0
+
+
+def _awk_to_str(v):
+    if isinstance(v, bool):
+        return "1" if v else "0"
+    if isinstance(v, int):
+        return str(v)
+    if isinstance(v, float):
+        if v.is_integer():
+            return str(int(v))
+        return format(v, "g")
+    return str(v)
+
+
+def _awk_truthy(v):
+    if isinstance(v, (int, float)):
+        return v != 0
+    if isinstance(v, str):
+        return v != ""
+    return bool(v)
+
+
+def _awk_is_numlike(v):
+    if isinstance(v, (int, float)):
+        return True
+    if isinstance(v, str):
+        s = v.strip()
+        if not s:
+            return False
+        try:
+            float(s)
+            return True
+        except ValueError:
+            return False
+    return False
+
+
+def _awk_sprintf(fmt, args):
+    out = []
+    i = 0
+    ai = 0
+    while i < len(fmt):
+        ch = fmt[i]
+        if ch != "%":
+            out.append(ch)
+            i += 1
+            continue
+        j = i + 1
+        if j < len(fmt) and fmt[j] == "%":
+            out.append("%")
+            i = j + 1
+            continue
+        while j < len(fmt) and fmt[j] in "-+ 0#":
+            j += 1
+        while j < len(fmt) and fmt[j].isdigit():
+            j += 1
+        if j < len(fmt) and fmt[j] == ".":
+            j += 1
+            while j < len(fmt) and fmt[j].isdigit():
+                j += 1
+        if j >= len(fmt):
+            out.append(fmt[i:])
+            break
+        conv = fmt[j]
+        spec = fmt[i:j + 1]
+        arg = args[ai] if ai < len(args) else ""
+        ai += 1
+        try:
+            if conv in "di":
+                out.append(spec % int(_awk_to_num(arg)))
+            elif conv in "fFeEgG":
+                out.append(spec % float(_awk_to_num(arg)))
+            elif conv in "xXo":
+                out.append(spec % int(_awk_to_num(arg)))
+            elif conv == "c":
+                s = _awk_to_str(arg)
+                out.append(spec.replace("c", "s") % (s[:1] if s else ""))
+            elif conv == "s":
+                out.append(spec % _awk_to_str(arg))
+            else:
+                out.append(spec)
+        except (ValueError, TypeError):
+            out.append(spec)
+        i = j + 1
+    return "".join(out)
+
+
+class _AwkNext(Exception):
+    pass
+
+
+class _AwkEvaluator:
+    def __init__(self, prog, fs, write_line, write_raw):
+        self.prog = prog
+        self.fs = fs
+        self.ofs = " "
+        self.write_line = write_line
+        self.write_raw = write_raw
+        self.vars = {}
+        self.fields = [""]
+        self.NR = 0
+
+    def _split_fields(self, line):
+        if line == "":
+            return []
+        if self.fs is None or self.fs == " ":
+            return line.split()
+        return line.split(self.fs)
+
+    def set_line(self, line):
+        self.NR += 1
+        self.fields = [line] + self._split_fields(line)
+
+    def _get_var(self, name):
+        if name == "NR":  return self.NR
+        if name == "NF":  return len(self.fields) - 1
+        if name == "FS":  return self.fs if self.fs is not None else " "
+        if name == "OFS": return self.ofs
+        return self.vars.get(name, "")
+
+    def _set_var(self, name, value):
+        if name == "FS":
+            self.fs = _awk_to_str(value)
+        elif name == "OFS":
+            self.ofs = _awk_to_str(value)
+        elif name == "NR":
+            self.NR = int(_awk_to_num(value))
+        elif name == "NF":
+            pass
+        else:
+            self.vars[name] = value
+
+    def _get_field(self, idx_v):
+        idx = int(_awk_to_num(idx_v))
+        if idx < 0 or idx >= len(self.fields):
+            return ""
+        return self.fields[idx]
+
+    def _set_field(self, idx_v, value):
+        idx = int(_awk_to_num(idx_v))
+        if idx < 0:
+            return
+        while len(self.fields) <= idx:
+            self.fields.append("")
+        self.fields[idx] = _awk_to_str(value)
+        if idx == 0:
+            self.fields[1:] = self._split_fields(self.fields[0])
+        else:
+            self.fields[0] = self.ofs.join(self.fields[1:])
+
+    def eval_expr(self, e):
+        k = e[0]
+        if k == "Num":   return e[1]
+        if k == "Str":   return e[1]
+        if k == "Var":   return self._get_var(e[1])
+        if k == "Field": return self._get_field(self.eval_expr(e[1]))
+        if k == "UnaryOp":
+            v = self.eval_expr(e[2])
+            if e[1] == "-": return -_awk_to_num(v)
+            if e[1] == "!": return 0 if _awk_truthy(v) else 1
+        if k == "BinOp":
+            op = e[1]
+            if op == "&&":
+                return 1 if (_awk_truthy(self.eval_expr(e[2]))
+                             and _awk_truthy(self.eval_expr(e[3]))) else 0
+            if op == "||":
+                return 1 if (_awk_truthy(self.eval_expr(e[2]))
+                             or _awk_truthy(self.eval_expr(e[3]))) else 0
+            a = self.eval_expr(e[2])
+            b = self.eval_expr(e[3])
+            if op == "concat":
+                return _awk_to_str(a) + _awk_to_str(b)
+            if op in ("+", "-", "*", "/", "%"):
+                an, bn = _awk_to_num(a), _awk_to_num(b)
+                if op == "+": return an + bn
+                if op == "-": return an - bn
+                if op == "*": return an * bn
+                if op == "/":
+                    if bn == 0:
+                        raise ValueError("division by zero")
+                    r = an / bn
+                    return int(r) if isinstance(an, int) and isinstance(bn, int) and r.is_integer() else r
+                if op == "%":
+                    if bn == 0:
+                        raise ValueError("division by zero")
+                    return an % bn
+            if _awk_is_numlike(a) and _awk_is_numlike(b):
+                av, bv = _awk_to_num(a), _awk_to_num(b)
+            else:
+                av, bv = _awk_to_str(a), _awk_to_str(b)
+            if op == "==": return 1 if av == bv else 0
+            if op == "!=": return 1 if av != bv else 0
+            if op == "<":  return 1 if av <  bv else 0
+            if op == "<=": return 1 if av <= bv else 0
+            if op == ">":  return 1 if av >  bv else 0
+            if op == ">=": return 1 if av >= bv else 0
+        if k == "MatchOp":
+            _, lhs, rhs, negate = e
+            text = _awk_to_str(self.eval_expr(lhs))
+            if rhs[0] == "Regex":
+                pat = rhs[1]
+            else:
+                pat = _awk_to_str(self.eval_expr(rhs))
+            m = re.search(pat, text)
+            return (0 if m else 1) if negate else (1 if m else 0)
+        if k == "Regex":
+            m = re.search(e[1], self.fields[0])
+            return 1 if m else 0
+        if k == "Assign":
+            _, op, target, valexpr = e
+            new = self.eval_expr(valexpr)
+            if op != "=":
+                old = self.eval_expr(target)
+                on, nn = _awk_to_num(old), _awk_to_num(new)
+                if   op == "+=": new = on + nn
+                elif op == "-=": new = on - nn
+                elif op == "*=": new = on * nn
+                elif op == "/=":
+                    if nn == 0:
+                        raise ValueError("division by zero")
+                    new = on / nn
+                elif op == "%=":
+                    if nn == 0:
+                        raise ValueError("division by zero")
+                    new = on % nn
+            if target[0] == "Var":
+                self._set_var(target[1], new)
+            elif target[0] == "Field":
+                self._set_field(self.eval_expr(target[1]), new)
+            else:
+                raise ValueError("invalid assignment target")
+            return new
+        if k == "Call":
+            return self._call(e[1], [self.eval_expr(a) for a in e[2]])
+        raise ValueError(f"unknown expr {k!r}")
+
+    def _call(self, name, args):
+        if name == "length":
+            v = args[0] if args else self.fields[0]
+            return len(_awk_to_str(v))
+        if name == "substr":
+            s = _awk_to_str(args[0])
+            start = int(_awk_to_num(args[1]))
+            if len(args) >= 3:
+                length = int(_awk_to_num(args[2]))
+                lo = max(start, 1) - 1
+                hi = start - 1 + length
+                return s[lo:hi]
+            return s[max(start - 1, 0):]
+        if name == "index":
+            s = _awk_to_str(args[0])
+            t = _awk_to_str(args[1])
+            if not t:
+                return 0
+            p = s.find(t)
+            return p + 1 if p >= 0 else 0
+        if name == "tolower": return _awk_to_str(args[0]).lower()
+        if name == "toupper": return _awk_to_str(args[0]).upper()
+        if name == "int":     return int(_awk_to_num(args[0]))
+        if name == "sprintf":
+            return _awk_sprintf(_awk_to_str(args[0]), args[1:])
+        raise ValueError(f"unknown function {name!r}")
+
+    def exec_stmt(self, s):
+        k = s[0]
+        if k == "Print":
+            if not s[1]:
+                self.write_line(self.fields[0])
+            else:
+                parts = [_awk_to_str(self.eval_expr(e)) for e in s[1]]
+                self.write_line(self.ofs.join(parts))
+            return
+        if k == "Printf":
+            vals = [self.eval_expr(e) for e in s[1]]
+            self.write_raw(_awk_sprintf(_awk_to_str(vals[0]), vals[1:]))
+            return
+        if k == "Next":
+            raise _AwkNext()
+        if k == "Block":
+            for st in s[1]:
+                self.exec_stmt(st)
+            return
+        if k == "If":
+            _, cond, then_s, else_s = s
+            if _awk_truthy(self.eval_expr(cond)):
+                self.exec_stmt(then_s)
+            elif else_s is not None:
+                self.exec_stmt(else_s)
+            return
+        if k == "ExprStmt":
+            self.eval_expr(s[1])
+            return
+        raise ValueError(f"unknown stmt {k!r}")
+
+    def _run_pattern_rules(self):
+        return [r for r in self.prog[1] if r[1] not in ("BEGIN", "END")]
+
+    def run_begin(self):
+        for r in self.prog[1]:
+            if r[1] == "BEGIN" and r[2] is not None:
+                self.exec_stmt(r[2])
+
+    def run_end(self):
+        for r in self.prog[1]:
+            if r[1] == "END" and r[2] is not None:
+                self.exec_stmt(r[2])
+
+    def run_line(self, line):
+        self.set_line(line)
+        try:
+            for rule in self._run_pattern_rules():
+                pat = rule[1]
+                matched = True if pat is None else _awk_truthy(self.eval_expr(pat))
+                if matched:
+                    if rule[2] is None:
+                        self.write_line(self.fields[0])
+                    else:
+                        self.exec_stmt(rule[2])
+        except _AwkNext:
+            pass
+
+
+class CmdAwk(Cmd):
+    def __init__(self):
+        Cmd.__init__(self, "awk")
+
+    def help(self):
+        return (
+            "[-F<sep>] '<program>' [<file>...]"
+            "   : pattern-action text processor (subset)"
+        )
+
+    def execute(self, shell, args):
+        fs = None
+        program = None
+        filenames = []
+        idx = 0
+        while idx < len(args):
+            a = args[idx]
+            if a == "-F":
+                if idx + 1 >= len(args):
+                    shell.oute.print("ERR: awk: -F requires an argument")
+                    return
+                fs = args[idx + 1]
+                idx += 2
+                continue
+            if a.startswith("-F") and len(a) > 2:
+                fs = a[2:]
+                idx += 1
+                continue
+            if program is None:
+                program = a
+            else:
+                filenames.append(a)
+            idx += 1
+        if program is None:
+            shell.oute.print("ERR: awk: missing program")
+            return
+        try:
+            tokens = _awk_lex(program)
+            ast = _AwkParser(tokens).parse_program()
+        except ValueError as e:
+            shell.oute.print(f"ERR: awk: {e}")
+            return
+
+        ev = _AwkEvaluator(ast, fs, shell.outs.print, shell.outs.write)
+        try:
+            ev.run_begin()
+            if filenames:
+                for fn in filenames:
+                    if not os.path.isabs(fn):
+                        fn = shell.canon(os.path.join(shell.cwd, fn))
+                    if not os.path.exists(fn):
+                        shell.oute.print(f"ERR: {fn} not found")
+                        continue
+                    with open(fn, encoding="utf8", errors="replace") as f:
+                        for line in f:
+                            line = line.rstrip("\n").rstrip("\r")
+                            ev.run_line(line)
+            elif shell.current_stdin is not None:
+                for line in shell.current_stdin:
+                    line = line.rstrip("\n").rstrip("\r")
+                    ev.run_line(line)
+            ev.run_end()
+        except ValueError as e:
+            shell.oute.print(f"ERR: awk: {e}")
 
 
 class CmdTee(Cmd):

@@ -2542,6 +2542,145 @@ class TestXargs(ShellTestCase):
 
 
 # ═════════════════════════════════════════════════════════════════════════════
+# awk
+# ═════════════════════════════════════════════════════════════════════════════
+
+class TestAwk(ShellTestCase):
+
+    def test_default_action_prints_line(self):
+        self.write_file("d.txt", "alpha\nbeta\n")
+        out = self.out("awk '1' d.txt")
+        self.assertEqual(out, "alpha\nbeta")
+
+    def test_regex_pattern(self):
+        self.write_file("d.txt", "alpha\nbeta\ngamma\n")
+        out = self.out("awk '/a$/' d.txt")
+        self.assertEqual(out, "alpha\nbeta\ngamma")  # all end with a
+
+    def test_regex_pattern_filter(self):
+        self.write_file("d.txt", "one\ntwo\nthree\n")
+        out = self.out("awk '/^t/' d.txt")
+        self.assertEqual(out, "two\nthree")
+
+    def test_print_field(self):
+        self.write_file("d.txt", "a b c\nd e f\n")
+        out = self.out("awk '{print $2}' d.txt")
+        self.assertEqual(out, "b\ne")
+
+    def test_print_multiple_fields(self):
+        self.write_file("d.txt", "a b c\n")
+        out = self.out("awk '{print $1, $3}' d.txt")
+        self.assertEqual(out, "a c")
+
+    def test_field_separator_F(self):
+        self.write_file("d.txt", "root:x:0\nuser:x:1000\n")
+        out = self.out("awk -F: '{print $1}' d.txt")
+        self.assertEqual(out, "root\nuser")
+
+    def test_NR_NF(self):
+        self.write_file("d.txt", "a b\nc d e\n")
+        out = self.out("awk '{print NR, NF}' d.txt")
+        self.assertEqual(out, "1 2\n2 3")
+
+    def test_NF_filter(self):
+        self.write_file("d.txt", "a\na b\na b c\n")
+        out = self.out("awk 'NF > 2' d.txt")
+        self.assertEqual(out, "a b c")
+
+    def test_sum_column(self):
+        self.write_file("d.txt", "1\n2\n3\n4\n")
+        out = self.out("awk '{sum += $1} END {print sum}' d.txt")
+        self.assertEqual(out, "10")
+
+    def test_begin_block(self):
+        self.write_file("d.txt", "x\n")
+        out = self.out("awk 'BEGIN {print \"hi\"} {print}' d.txt")
+        self.assertEqual(out, "hi\nx")
+
+    def test_end_only(self):
+        self.write_file("d.txt", "a\nb\n")
+        out = self.out("awk 'END {print NR}' d.txt")
+        self.assertEqual(out, "2")
+
+    def test_if_else(self):
+        self.write_file("d.txt", "1\n2\n3\n4\n")
+        out = self.out(
+            "awk '{ if ($1 % 2 == 0) print \"even\"; else print \"odd\" }' d.txt"
+        )
+        self.assertEqual(out, "odd\neven\nodd\neven")
+
+    def test_next_skips(self):
+        self.write_file("d.txt", "a\nb\nc\n")
+        out = self.out(
+            "awk '/b/ {next} {print}' d.txt"
+        )
+        self.assertEqual(out, "a\nc")
+
+    def test_match_operator(self):
+        self.write_file("d.txt", "foo 1\nbar 2\nfoobar 3\n")
+        out = self.out("awk '$1 ~ /foo/ {print $2}' d.txt")
+        self.assertEqual(out, "1\n3")
+
+    def test_not_match_operator(self):
+        self.write_file("d.txt", "foo\nbar\n")
+        out = self.out("awk '$1 !~ /foo/' d.txt")
+        self.assertEqual(out, "bar")
+
+    def test_ofs(self):
+        self.write_file("d.txt", "a b c\n")
+        out = self.out("awk 'BEGIN{OFS=\",\"} {print $1, $2, $3}' d.txt")
+        self.assertEqual(out, "a,b,c")
+
+    def test_concat(self):
+        self.write_file("d.txt", "x\n")
+        out = self.out("awk '{print \"hi=\" $1}' d.txt")
+        self.assertEqual(out, "hi=x")
+
+    def test_length_function(self):
+        self.write_file("d.txt", "hello\nworld!\n")
+        out = self.out("awk '{print length($1)}' d.txt")
+        self.assertEqual(out, "5\n6")
+
+    def test_substr(self):
+        self.write_file("d.txt", "abcdef\n")
+        out = self.out("awk '{print substr($1, 2, 3)}' d.txt")
+        self.assertEqual(out, "bcd")
+
+    def test_toupper_tolower(self):
+        self.write_file("d.txt", "Hello\n")
+        out = self.out("awk '{print toupper($1), tolower($1)}' d.txt")
+        self.assertEqual(out, "HELLO hello")
+
+    def test_pipe_input(self):
+        out = self.out("print foo bar | awk '{print $2}'")
+        self.assertEqual(out, "bar")
+
+    def test_printf(self):
+        self.write_file("d.txt", "3\n")
+        out = self.out("awk '{printf \"%05d\\n\", $1}' d.txt")
+        self.assertEqual(out, "00003")
+
+    def test_comparison_numeric(self):
+        self.write_file("d.txt", "5\n10\n2\n")
+        out = self.out("awk '$1 > 3' d.txt")
+        self.assertEqual(out, "5\n10")
+
+    def test_string_comparison(self):
+        # Non-numeric strings compare lexicographically.
+        out = self.out("awk 'BEGIN { if (\"apple\" < \"banana\") print \"yes\" }'")
+        self.assertEqual(out, "yes")
+
+    def test_assignment_to_field(self):
+        self.write_file("d.txt", "a b c\n")
+        out = self.out("awk '{$2 = \"X\"; print}' d.txt")
+        self.assertEqual(out, "a X c")
+
+    def test_division_by_zero(self):
+        _, err = self.run_cmd("awk 'BEGIN { print 1/0 }'")
+        self.assertIn("division by zero", err)
+
+
+# ═════════════════════════════════════════════════════════════════════════════
 # entry point
 # ═════════════════════════════════════════════════════════════════════════════
 
