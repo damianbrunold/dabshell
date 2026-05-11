@@ -400,20 +400,20 @@ def split_command(line, shell, with_vars=True):
         line = replace_vars(line, shell)
     parts = []
     current_part = ""
-    in_quote = False
+    have_part = False  # tracks whether current_part is "active" (incl. "")
+    in_dquote = False
+    in_squote = False
     idx = 0
     while idx < len(line):
         ch = line[idx]
-        if ch == "\"" and not in_quote:
-            if current_part:
-                parts.append(current_part)
-                current_part = ""
-            in_quote = True
+        if ch == "\"" and not in_squote and not in_dquote:
+            in_dquote = True
+            have_part = True
         elif (
             ch == "\\"
             and idx < len(line) - 1
             and line[idx+1] == "\""
-            and in_quote
+            and in_dquote
         ):
             current_part += "\""
             idx += 1
@@ -421,27 +421,33 @@ def split_command(line, shell, with_vars=True):
             ch == "\\"
             and idx < len(line) - 1
             and line[idx+1] == "\\"
-            and in_quote
+            and in_dquote
         ):
             current_part += "\\"
             idx += 1
-        elif ch == "\"" and in_quote:
-            in_quote = False
-            parts.append(current_part)
-            current_part = ""
-        elif ch == "~" and not in_quote:
+        elif ch == "\"" and in_dquote:
+            in_dquote = False
+        elif ch == "'" and not in_dquote and not in_squote:
+            in_squote = True
+            have_part = True
+        elif ch == "'" and in_squote:
+            in_squote = False
+        elif ch == "~" and not in_dquote and not in_squote:
             if "user-home" in shell.options:
                 current_part += shell.options.get("user-home")
             else:
                 current_part += os.path.expanduser("~")
-        elif ch == " " and not in_quote:
-            if current_part:
+            have_part = True
+        elif ch == " " and not in_dquote and not in_squote:
+            if have_part:
                 parts.append(current_part)
                 current_part = ""
+                have_part = False
         else:
             current_part += ch
+            have_part = True
         idx += 1
-    if current_part:
+    if have_part:
         parts.append(current_part)
     if not parts:
         return "", []
@@ -449,14 +455,17 @@ def split_command(line, shell, with_vars=True):
 
 
 def quote_arg(arg):
+    if arg == "":
+        return "''"
     if " " in arg or "\"" in arg or "\'" in arg:
+        if "'" not in arg:
+            return "'" + arg + "'"
+        # Fall back to double-quoting with escapes when the value contains
+        # a single quote (rare).
         arg = arg.replace("\\", "\\\\")
         arg = arg.replace("\"", "\\\"")
         return "\"" + arg + "\""
-    elif arg == "":
-        return "\"\""
-    else:
-        return arg
+    return arg
 
 
 def quote_args(args):
@@ -2005,10 +2014,16 @@ def _tokenize_expr(s):
     i = 0
     current = []
     in_quote = False
+    in_squote = False
     current_quoted = False   # True if any quoted span contributed to current
     while i < len(s):
         ch = s[i]
-        if in_quote:
+        if in_squote:
+            if ch == "'":
+                in_squote = False
+            else:
+                current.append(ch)
+        elif in_quote:
             if ch == '\\' and i + 1 < len(s) and s[i + 1] in ('"', '\\'):
                 current.append(s[i + 1])
                 i += 2
@@ -2020,6 +2035,9 @@ def _tokenize_expr(s):
         else:
             if ch == '"':
                 in_quote = True
+                current_quoted = True
+            elif ch == "'":
+                in_squote = True
                 current_quoted = True
             elif ch in '()':
                 if current or current_quoted:

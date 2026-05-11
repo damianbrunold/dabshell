@@ -156,16 +156,19 @@ class TestQuoting(unittest.TestCase):
         self.assertEqual(m.quote_arg("hello"), "hello")
 
     def test_quote_arg_with_space(self):
-        self.assertEqual(m.quote_arg("hello world"), '"hello world"')
+        self.assertEqual(m.quote_arg("hello world"), "'hello world'")
 
     def test_quote_arg_with_double_quote(self):
-        self.assertEqual(m.quote_arg('say "hi"'), '"say \\"hi\\""')
+        self.assertEqual(m.quote_arg('say "hi"'), "'say \"hi\"'")
+
+    def test_quote_arg_with_single_quote(self):
+        self.assertEqual(m.quote_arg("it's mine"), '"it\'s mine"')
 
     def test_quote_arg_empty(self):
-        self.assertEqual(m.quote_arg(""), '""')
+        self.assertEqual(m.quote_arg(""), "''")
 
     def test_quote_args_multiple(self):
-        self.assertEqual(m.quote_args(["a", "b c", ""]), 'a "b c" ""')
+        self.assertEqual(m.quote_args(["a", "b c", ""]), "a 'b c' ''")
 
     def _shell(self):
         """Minimal shell-like object for split_command."""
