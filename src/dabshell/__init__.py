@@ -1,4 +1,5 @@
 import collections
+import contextlib
 import ctypes
 import datetime
 import difflib
@@ -107,18 +108,37 @@ class RawInput:
         if not IS_WIN:
             self._fd = sys.stdin.fileno()
             self._old_settings = termios.tcgetattr(sys.stdin)
-            tty.setraw(sys.stdin)
-            # tty.setraw clears OPOST, which disables \n -> \r\n translation on
-            # output.  Re-enable it so commands that write plain \n still move
-            # the cursor to column 1.
-            new = termios.tcgetattr(sys.stdin)
-            new[1] |= termios.OPOST
-            termios.tcsetattr(sys.stdin, termios.TCSADRAIN, new)
+            self._enter_raw()
+
+    def _enter_raw(self):
+        if IS_WIN:
+            return
+        tty.setraw(sys.stdin)
+        # tty.setraw clears OPOST, which disables \n -> \r\n translation on
+        # output.  Re-enable it so commands that write plain \n still move
+        # the cursor to column 1.
+        new = termios.tcgetattr(sys.stdin)
+        new[1] |= termios.OPOST
+        termios.tcsetattr(sys.stdin, termios.TCSADRAIN, new)
 
     def close(self):
         """Restore the terminal to its original settings (Linux only)."""
         if not IS_WIN:
             termios.tcsetattr(sys.stdin, termios.TCSADRAIN, self._old_settings)
+
+    @contextlib.contextmanager
+    def cooked(self):
+        # Children inherit our tty modes; OpenSSH also forwards them into the
+        # remote pty via pty-req, so leaving raw mode in place gives the remote
+        # shell no echo and no line editing until the user runs `reset`.
+        if IS_WIN or self._old_settings is None:
+            yield
+            return
+        termios.tcsetattr(self._fd, termios.TCSADRAIN, self._old_settings)
+        try:
+            yield
+        finally:
+            self._enter_raw()
 
     def getch(self):
         if IS_WIN:
@@ -1873,25 +1893,26 @@ class Dabshell:
             oute_direct = isinstance(self.oute, (StdError, StdOutput, FileOutput))
             use_capture = (not outs_direct) or (not oute_direct)
 
-            if use_capture:
-                p = subprocess.run(
-                    [executable, *args],
-                    cwd=self.cwd,
-                    env=get_os_env(self.env, env_overlay),
-                    input=stdin_bytes,
-                    capture_output=True,
-                )
-                self.outs.write(p.stdout.decode("utf-8", errors="replace"))
-                self.oute.write(p.stderr.decode("utf-8", errors="replace"))
-            else:
-                p = subprocess.run(
-                    [executable, *args],
-                    cwd=self.cwd,
-                    env=get_os_env(self.env, env_overlay),
-                    input=stdin_bytes,
-                    stdout=self.outs.out,
-                    stderr=self.oute.out,
-                )
+            with self.inp.cooked():
+                if use_capture:
+                    p = subprocess.run(
+                        [executable, *args],
+                        cwd=self.cwd,
+                        env=get_os_env(self.env, env_overlay),
+                        input=stdin_bytes,
+                        capture_output=True,
+                    )
+                    self.outs.write(p.stdout.decode("utf-8", errors="replace"))
+                    self.oute.write(p.stderr.decode("utf-8", errors="replace"))
+                else:
+                    p = subprocess.run(
+                        [executable, *args],
+                        cwd=self.cwd,
+                        env=get_os_env(self.env, env_overlay),
+                        input=stdin_bytes,
+                        stdout=self.outs.out,
+                        stderr=self.oute.out,
+                    )
             if p.returncode != 0:
                 raise CommandFailedException()
             if history:
