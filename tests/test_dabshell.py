@@ -2388,6 +2388,72 @@ class TestEnv(unittest.TestCase):
         self.assertIn("b", child.names())
 
 
+class TestEnvOverlay(ShellTestCase):
+    """Per-stage NAME=value env overlays (bash-style FOO=bar cmd)."""
+
+    def test_parse_single_assignment(self):
+        stage = m._parse_redirects("FOO=bar mycmd arg")
+        self.assertEqual(stage.env_overlay, {"FOO": "bar"})
+        self.assertEqual(stage.raw, "mycmd arg")
+
+    def test_parse_multiple_assignments(self):
+        stage = m._parse_redirects("A=1 B=two mycmd")
+        self.assertEqual(stage.env_overlay, {"A": "1", "B": "two"})
+        self.assertEqual(stage.raw, "mycmd")
+
+    def test_assignment_after_command_is_argument(self):
+        stage = m._parse_redirects("mycmd FOO=bar")
+        self.assertIsNone(stage.env_overlay)
+        self.assertEqual(stage.raw, "mycmd FOO=bar")
+
+    def test_empty_value(self):
+        stage = m._parse_redirects("FOO= mycmd")
+        self.assertEqual(stage.env_overlay, {"FOO": ""})
+        self.assertEqual(stage.raw, "mycmd")
+
+    def test_no_assignments(self):
+        stage = m._parse_redirects("mycmd a b c")
+        self.assertIsNone(stage.env_overlay)
+
+    def test_get_os_env_applies_overlay(self):
+        env = m.Env()
+        env.set("env:KEEP", "kept")
+        env.set("env:OVER", "original")
+        merged = m.get_os_env(env, {"OVER": "overridden", "NEW": "added"})
+        self.assertEqual(merged["KEEP"], "kept")
+        self.assertEqual(merged["OVER"], "overridden")
+        self.assertEqual(merged["NEW"], "added")
+
+    def test_overlay_reaches_subprocess(self):
+        import shutil as _shutil
+        python = _shutil.which("python3") or _shutil.which("python")
+        if python is None:
+            self.skipTest("no python interpreter found on PATH")
+        out, _ = self.run_cmd(
+            f'DABSHELL_TEST_VAR=hello "{python}" -c '
+            f'"import os; print(os.environ.get(\'DABSHELL_TEST_VAR\', \'MISSING\'))"'
+        )
+        self.assertIn("hello", out)
+
+    def test_overlay_does_not_persist(self):
+        import shutil as _shutil
+        python = _shutil.which("python3") or _shutil.which("python")
+        if python is None:
+            self.skipTest("no python interpreter found on PATH")
+        # Set via overlay on one command
+        self.run_cmd(
+            f'DABSHELL_TEST_NOPERSIST=x "{python}" -c "import sys; sys.exit(0)"'
+        )
+        # On a follow-up command, the variable should not be set
+        out, _ = self.run_cmd(
+            f'"{python}" -c '
+            f'"import os; print(os.environ.get(\'DABSHELL_TEST_NOPERSIST\', \'MISSING\'))"'
+        )
+        self.assertIn("MISSING", out)
+        # And no env:NAME entry should have been added to the shell env
+        self.assertIsNone(self.shell.env.get("env:DABSHELL_TEST_NOPERSIST"))
+
+
 # ═════════════════════════════════════════════════════════════════════════════
 # 26. Bug fixes
 # ═════════════════════════════════════════════════════════════════════════════

@@ -479,6 +479,7 @@ class Stage:
         "stdout_file", "stdout_append",
         "stderr_file", "stderr_append",
         "both_file",   "both_append",
+        "env_overlay",
     )
 
     def __init__(self, raw):
@@ -489,6 +490,7 @@ class Stage:
         self.stderr_append = False
         self.both_file     = None   # &>  / &>>  (stdout + stderr together)
         self.both_append   = False
+        self.env_overlay   = None   # dict[str,str] of NAME=value prefixes, or None
 
 
 def _tokenize_unquoted(s):
@@ -585,6 +587,9 @@ def _split_pipe(s):
 # Redirect token patterns, ordered longest-first so >> beats >
 _REDIRECT_OPS = ["&>>", "&>", "2>>", "2>", ">>", ">"]
 
+# Leading NAME=value assignments on a command line (bash-style env overlay).
+_ASSIGN_RE = re.compile(r"^([A-Za-z_][A-Za-z0-9_]*)=(.*)$")
+
 
 def _parse_redirects(raw):
     """Strip redirect tokens from *raw* and return (clean_raw, Stage-fields).
@@ -600,6 +605,19 @@ def _parse_redirects(raw):
     tokens = _tokenize_unquoted(raw)
     kept = []
     i = 0
+    # Peel off leading NAME=value tokens into a per-stage env overlay.
+    # Only bare (unquoted) tokens count, and only before the command itself.
+    while i < len(tokens):
+        tok, tok_quoted, _ = tokens[i]
+        if tok_quoted:
+            break
+        m = _ASSIGN_RE.match(tok)
+        if not m:
+            break
+        if stage.env_overlay is None:
+            stage.env_overlay = {}
+        stage.env_overlay[m.group(1)] = m.group(2)
+        i += 1
     while i < len(tokens):
         tok, tok_quoted, tok_squoted = tokens[i]
         if tok_quoted:
@@ -655,7 +673,7 @@ def parse_pipeline(segment):
     return [_parse_redirects(r) for r in raw_stages]
 
 
-def get_os_env(env):
+def get_os_env(env, overlay=None):
     result = {}
     result.update(os.environ)
     for name in env.names():
@@ -665,6 +683,8 @@ def get_os_env(env):
         name = name[len("env:"):]
         if value is not None:
             result[name] = str(value)
+    if overlay:
+        result.update(overlay)
     return result
 
 
@@ -1784,7 +1804,8 @@ class Dabshell:
             script_path = cmd if os.path.isabs(cmd) else os.path.join(self.cwd, cmd)
             scm_cmd, scm_args = self._resolve_scm_runner()
             self._run_external(
-                scm_cmd, [*scm_args, script_path, *args], stdin_data, history
+                scm_cmd, [*scm_args, script_path, *args], stdin_data, history,
+                env_overlay=stage.env_overlay,
             )
         elif not args and os.path.isdir(
             cmd if os.path.isabs(cmd) else os.path.join(self.cwd, cmd)
@@ -1799,11 +1820,17 @@ class Dabshell:
                 finally:
                     self.current_stdin = None
             else:
-                self._run_external("ls", [cmd], stdin_data, history)
+                self._run_external(
+                    "ls", [cmd], stdin_data, history,
+                    env_overlay=stage.env_overlay,
+                )
         else:
-            self._run_external(cmd, args, stdin_data, history)
+            self._run_external(
+                cmd, args, stdin_data, history,
+                env_overlay=stage.env_overlay,
+            )
 
-    def _run_external(self, cmd, args, stdin_data, history):
+    def _run_external(self, cmd, args, stdin_data, history, env_overlay=None):
         """Run an external process, wiring stdin/stdout/stderr correctly.
 
         - stdin_data: str or None.  When not None, it is passed to the process
@@ -1830,7 +1857,8 @@ class Dabshell:
             if executable.endswith(".scm"):
                 scm_cmd, scm_args = self._resolve_scm_runner()
                 self._run_external(
-                    scm_cmd, [*scm_args, executable, *args], stdin_data, history
+                    scm_cmd, [*scm_args, executable, *args], stdin_data, history,
+                    env_overlay=env_overlay,
                 )
                 return
 
@@ -1849,7 +1877,7 @@ class Dabshell:
                 p = subprocess.run(
                     [executable, *args],
                     cwd=self.cwd,
-                    env=get_os_env(self.env),
+                    env=get_os_env(self.env, env_overlay),
                     input=stdin_bytes,
                     capture_output=True,
                 )
@@ -1859,7 +1887,7 @@ class Dabshell:
                 p = subprocess.run(
                     [executable, *args],
                     cwd=self.cwd,
-                    env=get_os_env(self.env),
+                    env=get_os_env(self.env, env_overlay),
                     input=stdin_bytes,
                     stdout=self.outs.out,
                     stderr=self.oute.out,
