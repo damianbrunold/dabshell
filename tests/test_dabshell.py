@@ -2747,6 +2747,130 @@ class TestAwk(ShellTestCase):
 
 
 # ═════════════════════════════════════════════════════════════════════════════
+# Tab completion
+# ═════════════════════════════════════════════════════════════════════════════
+
+class TestCompletionHelpers(unittest.TestCase):
+
+    def test_last_token_start(self):
+        self.assertEqual(m._last_token_start("ls sr"), (3, None))
+        self.assertEqual(m._last_token_start("ls "), (3, None))
+        self.assertEqual(m._last_token_start("ls 'a b"), (3, "'"))
+        self.assertEqual(m._last_token_start("ls \"a b"), (3, "\""))
+        self.assertEqual(m._last_token_start("ls 'a b' c"), (9, None))
+        self.assertEqual(m._last_token_start("ls x='a b"), (3, "'"))
+
+    def test_split_path_word_posix(self):
+        self.assertEqual(m._split_path_word("src/ma", False), ("src/", "ma"))
+        self.assertEqual(m._split_path_word("ma", False), ("", "ma"))
+        self.assertEqual(m._split_path_word("/usr/b", False), ("/usr/", "b"))
+
+    def test_split_path_word_windows_rooted_gets_drive(self):
+        self.assertEqual(
+            m._split_path_word("\\Program Fi", True, "C:"),
+            ("C:\\", "Program Fi"),
+        )
+        self.assertEqual(
+            m._split_path_word("/Program Fi", True, "D:"),
+            ("D:/", "Program Fi"),
+        )
+
+    def test_split_path_word_windows_drive(self):
+        self.assertEqual(m._split_path_word("C:\\Us", True), ("C:\\", "Us"))
+        self.assertEqual(m._split_path_word("C:foo", True), ("C:", "foo"))
+        self.assertEqual(m._split_path_word("a\\b/c", True), ("a\\b/", "c"))
+
+    def test_split_path_word_windows_unc(self):
+        self.assertEqual(
+            m._split_path_word("\\\\srv\\share\\di", True, "C:"),
+            ("\\\\srv\\share\\", "di"),
+        )
+        self.assertIsNone(m._split_path_word("\\\\srv", True, "C:"))
+        self.assertIsNone(m._split_path_word("\\\\srv\\", True, "C:"))
+        self.assertIsNone(m._split_path_word("\\\\srv\\sh", True, "C:"))
+
+    def test_common_prefix(self):
+        self.assertEqual(m._common_prefix(["abc", "abd"], False), "ab")
+        self.assertEqual(m._common_prefix(["Abc", "aBd"], False), "")
+        self.assertEqual(m._common_prefix(["Abc", "aBd"], True), "Ab")
+
+    def test_render_completion(self):
+        self.assertEqual(m._render_completion("src/", False), "src/")
+        self.assertEqual(m._render_completion("a.txt", True), "a.txt ")
+        self.assertEqual(m._render_completion("a b", False), "'a b")
+        self.assertEqual(m._render_completion("a b", True), "'a b' ")
+        self.assertEqual(m._render_completion("ab", False, "'"), "'ab")
+        self.assertEqual(
+            m._render_completion("it's", True), "\"it's\" ",
+        )
+        self.assertEqual(
+            m._render_completion("C:\\a b", False, "\""), "\"C:\\\\a b",
+        )
+
+
+class TestCompletion(ShellTestCase):
+
+    def setUp(self):
+        super().setUp()
+        os.mkdir(os.path.join(self.tmpdir, "Program Files"))
+        os.mkdir(os.path.join(self.tmpdir, "Program Files (x86)"))
+        os.mkdir(os.path.join(self.tmpdir, "src"))
+        for name in ["readme.txt", "src/main.py", "Program Files/a b.txt"]:
+            self.write_file(name, "")
+
+    def complete(self, text):
+        return self.shell.complete_line(text)[0]
+
+    def test_plain_dir_gets_separator(self):
+        self.assertEqual(self.complete("cat sr"), "cat src/")
+
+    def test_unique_file_adds_space(self):
+        self.assertEqual(self.complete("cat rea"), "cat readme.txt ")
+
+    def test_option_value(self):
+        self.assertEqual(self.complete("cmd file=sr"), "cmd file=src/")
+        self.assertEqual(self.complete("cmd --in=rea"), "cmd --in=readme.txt ")
+
+    def test_option_value_with_space(self):
+        self.assertEqual(
+            self.complete("cmd file=Program Files/a"),
+            None,  # unquoted space splits the token
+        )
+        self.assertEqual(
+            self.complete("cmd file='Program Files/a"),
+            "cmd file='Program Files/a b.txt' ",
+        )
+
+    def test_ambiguous_keeps_quote_open(self):
+        self.assertEqual(self.complete("cd Prog"), "cd 'Program Files")
+        self.assertEqual(
+            self.complete("cd 'Program Files ("),
+            "cd 'Program Files (x86)/",
+        )
+
+    def test_continue_inside_open_quote(self):
+        self.assertEqual(
+            self.complete("cat 'Program Files/a"),
+            "cat 'Program Files/a b.txt' ",
+        )
+
+    def test_earlier_args_preserved(self):
+        self.assertEqual(
+            self.complete("echo \"a b\" sr"), "echo \"a b\" src/",
+        )
+
+    def test_tilde_preserved(self):
+        self.assertEqual(self.complete("cat ~/sr"), "cat ~/src/")
+
+    def test_cd_only_dirs(self):
+        self.assertEqual(self.complete("cd s"), "cd src/")
+        self.assertIsNone(self.complete("cd rea"))
+
+    def test_no_match(self):
+        self.assertIsNone(self.complete("cat nothing"))
+
+
+# ═════════════════════════════════════════════════════════════════════════════
 # entry point
 # ═════════════════════════════════════════════════════════════════════════════
 

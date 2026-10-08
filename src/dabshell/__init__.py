@@ -492,6 +492,96 @@ def quote_args(args):
     return " ".join([quote_arg(arg) for arg in args])
 
 
+def _last_token_start(line):
+    """Return (start, open_quote) for the last token of line.
+
+    start is the raw index where the last token begins (len(line) when the
+    line ends in unquoted whitespace).  open_quote is the quote character
+    that is still open at the end of the line, or None.  Scanning follows
+    the same quoting rules as split_command.
+    """
+    start = None
+    in_dquote = False
+    in_squote = False
+    idx = 0
+    while idx < len(line):
+        ch = line[idx]
+        if in_dquote:
+            if ch == "\\" and idx < len(line) - 1 and line[idx+1] in "\"\\":
+                idx += 1
+            elif ch == "\"":
+                in_dquote = False
+        elif in_squote:
+            if ch == "'":
+                in_squote = False
+        elif ch == " ":
+            start = None
+        else:
+            if start is None:
+                start = idx
+            if ch == "\"":
+                in_dquote = True
+            elif ch == "'":
+                in_squote = True
+        idx += 1
+    if start is None:
+        start = len(line)
+    open_quote = "\"" if in_dquote else "'" if in_squote else None
+    return start, open_quote
+
+
+def _split_path_word(word, is_win, cwd_drive=""):
+    """Split a partial path into (dir_part, base) for completion.
+
+    dir_part keeps the text as typed (including its trailing separator) so
+    that completions can be built as dir_part + name.  On Windows a path
+    rooted without a drive (\\foo) gets cwd_drive prepended, and an
+    incomplete UNC root (\\\\server or \\\\server\\share) yields None
+    since there is no directory that could be listed.
+    """
+    seps = "\\/" if is_win else "/"
+    if is_win:
+        if len(word) >= 2 and word[0] in seps and word[1] in seps:
+            if len(re.split(r"[\\/]", word[2:])) < 3:
+                return None
+        elif word[:1] in seps:
+            word = cwd_drive + word
+    idx = max(word.rfind(sep) for sep in seps)
+    if is_win and idx < 2 and re.match(r"^[A-Za-z]:", word):
+        idx = max(idx, 1)  # drive-relative path like C:foo
+    return word[:idx+1], word[idx+1:]
+
+
+def _common_prefix(words, is_win):
+    """Longest common prefix of words (case-insensitive on Windows)."""
+    n = 0
+    for chars in zip(*words):
+        first = chars[0].lower() if is_win else chars[0]
+        if any((c.lower() if is_win else c) != first for c in chars):
+            break
+        n += 1
+    return words[0][:n]
+
+
+def _render_completion(text, final, open_quote=None):
+    """Render a completed path as raw command line text.
+
+    Quoting is only added when needed (or when the user already opened a
+    quote).  The quote is left open unless the completion is final, so that
+    the user can continue typing or press TAB again inside it.  A final
+    completion is closed and followed by a space.
+    """
+    needs_quote = open_quote or any(c in text for c in " '\"|&<>{")
+    if not needs_quote:
+        return text + (" " if final else "")
+    if "'" in text or open_quote == "\"":
+        text = text.replace("\\", "\\\\").replace("\"", "\\\"")
+        quote = "\""
+    else:
+        quote = "'"
+    return quote + text + (quote + " " if final else "")
+
+
 class Stage:
     """One command in a pipeline, with its redirect annotations stripped out."""
     __slots__ = (
@@ -1125,67 +1215,99 @@ class Dabshell:
             return None
         return os.path.normpath(os.path.abspath(path))
 
-    def complete_word(self, word, only_dir=False):
-        if word.startswith("\"") and word.endswith("\""):
-            word = word[1:-1]
+    def complete_line(self, text):
+        """Complete the last token of text.
+
+        Returns (new_text, potentials).  new_text is None when nothing
+        matches.  Only the last token is rewritten; everything before it is
+        kept verbatim.
+        """
+        start, open_quote = _last_token_start(text)
+        head, raw = text[:start], text[start:]
+        is_first = head.strip() == ""
+        cmd, _ = split_command(text, self, with_vars=False)
+        word = split_command(raw, self, with_vars=False)[0] if raw else ""
+        # option=value: only complete the part after the "="
+        prefix = ""
+        if not is_first:
+            m = re.match(r"^(-{0,2}[A-Za-z_][\w.-]*=)(.*)$", word, re.S)
+            if m:
+                prefix, word = m.group(1), m.group(2)
+        raw_rest = raw[len(prefix):] if raw.startswith(prefix) else raw
+        # keep a leading ~ instead of the expanded home directory
+        home = self.options.get("user-home") or os.path.expanduser("~")
+        tilde = raw_rest.startswith("~") and word.startswith(home)
+        completed, potentials, is_dir = self.complete_word(
+            word,
+            only_dir=cmd == "cd" and not is_first,
+            with_commands=not prefix,
+        )
+        if completed is None:
+            return None, potentials
+        if is_dir and not completed.endswith(("/", os.sep)):
+            if IS_WIN and ("/" not in word or "\\" in word):
+                completed += "\\"
+            else:
+                completed += "/"
+        final = not potentials and not is_dir
+        if tilde:
+            token = "~" + _render_completion(
+                completed[len(home):], final, open_quote,
+            )
+        else:
+            token = _render_completion(completed, final, open_quote)
+        return head + prefix + token, potentials
+
+    def complete_word(self, word, only_dir=False, with_commands=True):
+        """Return (completed, potentials, is_dir) for a partial word.
+
+        completed is None when nothing matches, the single match when it is
+        unique (potentials is then empty), or the common prefix of all
+        potentials.  is_dir tells whether a unique match is a directory.
+        """
+        with_commands = with_commands and not only_dir and word != ""
         potentials = []
-        if not only_dir:
+        if with_commands:
             for cname in self.env.names():
                 if cname.startswith(word):
                     potentials.append(cname)
-        for fname in os.listdir(self.cwd):
-            if fname.startswith(word):
-                if only_dir:
-                    if os.path.isdir(os.path.join(self.cwd, fname)):
-                        potentials.append(fname)
-                else:
-                    potentials.append(fname)
-        if not potentials:
-            # find completions for relative paths
-            if os.path.isabs(word):
-                pathfile = word
-                path = os.path.dirname(pathfile)
-                partial_path = path
-            else:
-                pathfile = os.path.join(self.cwd, word)
-                path = os.path.dirname(pathfile)
-                partial_path = path[len(self.cwd)+1:]
-            file = os.path.basename(pathfile)
-            try:
-                if os.path.isdir(path):
-                    for fname in os.listdir(path):
-                        if fname.startswith(file):
-                            if only_dir:
-                                if os.path.isdir(os.path.join(path, fname)):
-                                    potentials.append(
-                                        os.path.join(partial_path, fname)
-                                    )
-                            else:
-                                potentials.append(
-                                    os.path.join(partial_path, fname)
-                                )
-            except Exception:
-                pass  # ignore errors
-        if not potentials and not only_dir:
+        dirs = set()
+        for path, is_dir in self._complete_path(word, only_dir):
+            if path not in potentials:
+                potentials.append(path)
+            if is_dir:
+                dirs.add(path)
+        if not potentials and with_commands:
             # find completions for executables in e.g. venv and PATH
-            cmds = find_partial_executable(self.cwd, word)
-            if cmds:
-                potentials += cmds
+            potentials += find_partial_executable(self.cwd, word)
         if not potentials:
-            return None, []
+            return None, [], False
         if len(potentials) == 1:
-            return potentials[0], []
-        # find common prefix
-        prefix = word
-        prefix_len = len(word)
-        max_len = min([len(w) for w in potentials])
-        for idx in range(prefix_len+1, max_len+1):
-            prefixes = set([w[0:idx] for w in potentials])
-            if len(prefixes) > 1:
-                break
-            prefix = list(prefixes)[0]
-            prefix_len = len(prefix)
-        return prefix, potentials
+            return potentials[0], [], potentials[0] in dirs
+        return _common_prefix(potentials, IS_WIN), potentials, False
+
+    def _complete_path(self, word, only_dir):
+        """Return [(path, is_dir)] of filesystem entries matching word."""
+        split = _split_path_word(word, IS_WIN, os.path.splitdrive(self.cwd)[0])
+        if split is None:
+            return []
+        dir_part, base = split
+        path = os.path.join(self.cwd, dir_part) if dir_part else self.cwd
+        try:
+            names = sorted(os.listdir(path))
+        except OSError:
+            return []
+        if IS_WIN:
+            base = base.lower()
+        results = []
+        for fname in names:
+            if not (fname.lower() if IS_WIN else fname).startswith(base):
+                continue
+            is_dir = os.path.isdir(os.path.join(path, fname))
+            if only_dir and not is_dir:
+                continue
+            results.append((dir_part + fname, is_dir))
+        return results
 
     def _search_match(self, query, from_pos):
         """Return (position, command) of the nearest match at or before from_pos.
@@ -1392,33 +1514,18 @@ class Dabshell:
                     continue
 
                 if key == KEY_TAB:
-                    cmd = None
+                    text = None
                     rest = ""
                     if self.line.strip() and self.index == len(self.line):
-                        cmd, args = split_command(
-                            self.line,
-                            self,
-                            with_vars=False,
-                        )
+                        text = self.line
                     elif self.line.strip() and self.index < len(self.line) and self.line[self.index] == " ":
+                        text = self.line[:self.index]
                         rest = self.line[self.index:]
-                        cmd, args = split_command(
-                            self.line[:self.index],
-                            self,
-                            with_vars=False,
-                        )
-                    if cmd:
-                        parts = [cmd, *args]
-                        word = parts[-1]
-                        only_dir = cmd in ["cd"]
-                        completed, potentials = self.complete_word(
-                            word,
-                            only_dir=only_dir,
-                        )
-                        if completed and parts[-1] != completed:
-                            parts[-1] = completed
-                            self.line = quote_args(parts) + rest
-                            self.index = len(self.line)
+                    if text is not None:
+                        completed, potentials = self.complete_line(text)
+                        if completed is not None and completed != text:
+                            self.line = completed + rest
+                            self.index = len(completed)
                         elif tabbed:
                             if potentials:
                                 self.outp.print()
