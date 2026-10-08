@@ -1932,7 +1932,7 @@ class Dabshell:
             scm_cmd, scm_args = self._resolve_scm_runner()
             self._run_external(
                 scm_cmd, [*scm_args, script_path, *args], stdin_data, history,
-                env_overlay=stage.env_overlay,
+                env_overlay=stage.env_overlay, scm_runner=True,
             )
         elif not args and os.path.isdir(
             cmd if os.path.isabs(cmd) else os.path.join(self.cwd, cmd)
@@ -1957,7 +1957,9 @@ class Dabshell:
                 env_overlay=stage.env_overlay,
             )
 
-    def _run_external(self, cmd, args, stdin_data, history, env_overlay=None):
+    def _run_external(
+        self, cmd, args, stdin_data, history, env_overlay=None, scm_runner=False,
+    ):
         """Run an external process, wiring stdin/stdout/stderr correctly.
 
         - stdin_data: str or None.  When not None, it is passed to the process
@@ -1966,6 +1968,8 @@ class Dabshell:
           If those are StringOutput or FileOutput we capture/pipe; if they are
           StdOutput/StdError we pass the underlying file object directly so that
           the process output streams straight to the terminal without buffering.
+        - scm_runner: True when cmd is the runner for a .scm script; the
+          runner must not itself be a .scm script (that would recurse).
         """
         try:
             executable = self.canon(find_executable(self.cwd, cmd))
@@ -1982,10 +1986,15 @@ class Dabshell:
                     self.current_stdin = None
                 return
             if executable.endswith(".scm"):
+                if scm_runner:
+                    self.oute.print(
+                        f"ERR: scm runner {executable} is itself a .scm script"
+                    )
+                    raise CommandFailedException()
                 scm_cmd, scm_args = self._resolve_scm_runner()
                 self._run_external(
                     scm_cmd, [*scm_args, executable, *args], stdin_data, history,
-                    env_overlay=env_overlay,
+                    env_overlay=env_overlay, scm_runner=True,
                 )
                 return
 

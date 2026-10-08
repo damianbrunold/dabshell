@@ -508,6 +508,18 @@ script build.dsh {arg0}
 deploy.dsh production
 ```
 
+#### Scheme scripts (`.scm`)
+`.scm` files are run by an external Scheme interpreter: `foo.scm <arg>...` executes `scm <abs-path-to-foo.scm> <arg>...`. A script on the search path can also be run without its extension (`foo <arg>...`).
+
+dabshell does not bundle or prefer any particular Scheme. The `scm` command is looked up like any other external command (`venv`, `.venv`, current directory, then `PATH`; on Windows `PATH` lookup honors `PATHEXT`, so `scm.bat`/`scm.cmd` work). To use a specific implementation, define an alias named `scm`; its value replaces the runner, and its arguments go before the script path:
+
+```
+alias scm guile -s
+foo.scm a b                 # runs: guile -s /path/to/foo.scm a b
+```
+
+The runner must not itself resolve to a `.scm` script.
+
 #### `source <file>`
 Execute a script in the current shell environment (variables and aliases defined in the script remain active afterwards).
 ```

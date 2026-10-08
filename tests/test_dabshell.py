@@ -2746,6 +2746,15 @@ class TestAwk(ShellTestCase):
         self.assertIn("division by zero", err)
 
 
+class TestScmRunner(ShellTestCase):
+
+    def test_scm_runner_that_is_scm_script_does_not_recurse(self):
+        self.write_file("scm.scm", "")
+        self.write_file("foo.scm", "")
+        _, err = self.run_cmd("foo.scm")
+        self.assertIn("is itself a .scm script", err)
+
+
 # ═════════════════════════════════════════════════════════════════════════════
 # Tab completion
 # ═════════════════════════════════════════════════════════════════════════════
