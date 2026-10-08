@@ -2754,6 +2754,36 @@ class TestScmRunner(ShellTestCase):
         _, err = self.run_cmd("foo.scm")
         self.assertIn("is itself a .scm script", err)
 
+    def test_default_runner(self):
+        self.assertEqual(self.shell._resolve_scm_runner(), ("scm", []))
+
+    def test_alias_runner(self):
+        self.run_cmd("alias scm guile -s")
+        self.assertEqual(self.shell._resolve_scm_runner(), ("guile", ["-s"]))
+
+    def test_setscm_overrides_alias(self):
+        self.run_cmd("alias scm scmc")
+        self.run_cmd("setscm scmj")
+        self.assertEqual(self.shell._resolve_scm_runner(), ("scmj", []))
+
+    def test_setscm_with_args(self):
+        self.run_cmd("setscm guile -s")
+        self.assertEqual(self.shell._resolve_scm_runner(), ("guile", ["-s"]))
+
+    def test_setscm_shows_current_runner(self):
+        self.run_cmd("alias scm scmc")
+        out, _ = self.run_cmd("setscm")
+        self.assertEqual(out.strip(), "scmc")
+        self.run_cmd("setscm scmj")
+        out, _ = self.run_cmd("setscm")
+        self.assertEqual(out.strip(), "scmj")
+
+    def test_setscm_reset_falls_back_to_alias(self):
+        self.run_cmd("alias scm scmc")
+        self.run_cmd("setscm scmj")
+        self.run_cmd("setscm -")
+        self.assertEqual(self.shell._resolve_scm_runner(), ("scmc", []))
+
 
 # ═════════════════════════════════════════════════════════════════════════════
 # Tab completion

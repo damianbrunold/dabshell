@@ -518,6 +518,14 @@ alias scm guile -s
 foo.scm a b                 # runs: guile -s /path/to/foo.scm a b
 ```
 
+To switch the runner from within dabshell without touching the alias, use `setscm`; it takes precedence over the `scm` alias:
+
+```
+setscm scmj                 # .scm scripts now run with scmj
+setscm                      # show the runner currently in effect
+setscm -                    # drop the override (back to the alias or plain scm)
+```
+
 The runner must not itself resolve to a `.scm` script.
 
 #### `source <file>`

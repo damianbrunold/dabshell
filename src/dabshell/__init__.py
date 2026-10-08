@@ -997,6 +997,7 @@ class Dabshell:
                 "echo": "off",
                 "stop-on-error": "on",
             }
+            self.scm_override = None
             for name in os.environ:
                 self.env.set("env:" + name, os.environ.get(name, ""))
             self.init_cmd(CmdRun())
@@ -1048,6 +1049,7 @@ class Dabshell:
             self.init_cmd(CmdDate())
             self.init_cmd(CmdWhich())
             self.init_cmd(CmdTitle())
+            self.init_cmd(CmdSetScm())
             self.init_cmd(CmdHelp())
             self.init_cmd(CmdFile())
             self.init_cmd(CmdOption())
@@ -1879,10 +1881,14 @@ class Dabshell:
                 fo.close()
 
     def _resolve_scm_runner(self):
-        """Resolve the 'scm' runner, honoring an alias if one is defined.
+        """Resolve the 'scm' runner: a setscm override wins, then an 'scm'
+        alias, then the plain 'scm' command.
 
         Returns (command, extra_args) where extra_args precede the script path.
         """
+        if self.scm_override:
+            cmd, args = split_command(self.scm_override, self)
+            return cmd, args
         entry = self.env.get("scm")
         if isinstance(entry, CmdAliasDefinition):
             cmd, args = split_command(entry.value, self)
@@ -5963,6 +5969,25 @@ class CmdTitle(Cmd):
     def execute(self, shell, args):
         shell.title = " ".join(args)
         shell._set_title(shell.title)
+
+
+class CmdSetScm(Cmd):
+    def __init__(self):
+        Cmd.__init__(self, "setscm")
+
+    def help(self):
+        return (
+            "[<runner> [<arg>...] | -]   : show, set or reset the runner for .scm scripts"
+        )
+
+    def execute(self, shell, args):
+        if not args:
+            cmd, extra = shell._resolve_scm_runner()
+            shell.outs.print(quote_args([cmd, *extra]))
+        elif args == ["-"]:
+            shell.scm_override = None
+        else:
+            shell.scm_override = quote_args(args)
 
 
 class CmdResetTerm(Cmd):
