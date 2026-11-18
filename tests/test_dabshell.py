@@ -1166,6 +1166,34 @@ class TestLess(ShellTestCase):
         # Should not hang, should not raise.
         self.run_cmd("less big.txt")
 
+    def _less_status(self, keys):
+        """Run less on a 200-line file with *keys*; return the last status."""
+        import re
+        big = "\n".join(f"line{i}" for i in range(200)) + "\n"
+        self.write_file("big.txt", big)
+        feed = list(keys) + ["q"]
+        class _StubInp:
+            def getch(self_inp):
+                return feed.pop(0)
+        self.shell.inp = _StubInp()
+        out, _ = self.run_cmd("less big.txt")
+        return re.findall(r"lines (\d+)-\d+/200", out)[-1]
+
+    def test_less_arrow_keys_scroll(self):
+        self.assertEqual(self._less_status([m.KEY_DOWN, m.KEY_DOWN]), "3")
+        self.assertEqual(
+            self._less_status([m.KEY_DOWN, m.KEY_DOWN, m.KEY_UP]), "2")
+
+    def test_less_page_keys_scroll(self):
+        first = int(self._less_status([m.KEY_PAGEDOWN]))
+        self.assertGreater(first, 2)
+        self.assertEqual(
+            self._less_status([m.KEY_PAGEDOWN, m.KEY_PAGEUP]), "1")
+        self.assertEqual(self._less_status([m.KEY_END, m.KEY_HOME]), "1")
+
+    def test_less_enter_scrolls_and_ctrl_c_quits(self):
+        self.assertEqual(self._less_status([m.KEY_CR, m.KEY_CTRL_C, "j"]), "2")
+
 
 class _OutOfKeys(BaseException):
     """Raised by _KeyFeeder when a scripted editor session runs dry."""

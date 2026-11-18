@@ -6014,7 +6014,7 @@ class CmdLess(Cmd):
     def help(self):
         return (
             "[<file>]"
-            "   : pages through file or stdin (space=page, j/k=line, g/G=top/bottom, q=quit)"
+            "   : pages through file or stdin (space/PgDn, b/PgUp, j/k/arrows, g/G/Home/End, q=quit)"
         )
 
     def execute(self, shell, args):
@@ -6068,28 +6068,20 @@ class CmdLess(Cmd):
                 key = shell.inp.getch()
                 if key is None:
                     continue
-                if key in ("q", "Q", "\x03", "\x04"):
+                if key in ("q", "Q", KEY_CTRL_C, KEY_CTRL_D, KEY_ESC):
                     break
-                elif key == " ":
+                elif key in (" ", "f", KEY_PAGEDOWN, KEY_CTRL_V):
                     top = min(total - rows, top + rows)
-                elif key == "b":
+                elif key in ("b", KEY_PAGEUP):
                     top = max(0, top - rows)
-                elif key in ("j", "\r", "\n"):
+                elif key in ("j", KEY_CR, KEY_LF, KEY_DOWN, KEY_CTRL_N):
                     top = min(total - rows, top + 1)
-                elif key == "k":
+                elif key in ("k", KEY_UP, KEY_CTRL_P):
                     top = max(0, top - 1)
-                elif key == "g":
+                elif key in ("g", "<", KEY_HOME):
                     top = 0
-                elif key == "G":
+                elif key in ("G", ">", KEY_END):
                     top = max(0, total - rows)
-                elif key == "ARROW_DOWN":
-                    top = min(total - rows, top + 1)
-                elif key == "ARROW_UP":
-                    top = max(0, top - 1)
-                elif key == "PAGE_DOWN":
-                    top = min(total - rows, top + rows)
-                elif key == "PAGE_UP":
-                    top = max(0, top - rows)
         finally:
             if _VT_ENABLED:
                 shell.outs.write("\033[2J\033[H")
