@@ -230,6 +230,22 @@ mkdir dist && cp build/* dist && echo done
 
 `&&` is quote-aware and will not split on `&&` inside a quoted string.
 
+## Background jobs
+
+End a command with `&` to start it in the background. The shell prints the job number and process id and returns to the prompt right away:
+
+```
+emacs notes.txt &
+[1] 48213
+python server.py > server.log &
+```
+
+`&` can also separate commands: `make docs & make test` starts `make docs` in the background and then runs `make test` in the foreground. Once a background job ends, a notice like `[1] Done     emacs notes.txt` (or `Exit 2` for a non-zero exit) appears before the next prompt.
+
+Background jobs get no keyboard input (stdin is `/dev/null`) and run in their own process group, so Ctrl+C at the prompt does not stop them. They keep running after you exit dabshell. Their output goes to the terminal unless you redirect it. Only external commands can run in the background: built-ins, `.dsh` scripts and pipelines are rejected with an error.
+
+Use `jobs` to list background jobs and `wait` to block until they finish (see below).
+
 ---
 
 ## Quoting
@@ -585,6 +601,16 @@ date 7                      # one week from today
 date --with-time
 date --terse --with-time    # e.g. 20240315-143022
 date --format "%B %d, %Y"  # e.g. March 15, 2024
+```
+
+#### `jobs`
+List the background jobs started with `&`, with job number, pid, status (`Running`, `Done` or `Exit <code>`) and command line. Finished jobs are removed from the list after they have been shown.
+
+#### `wait [%<n>|<pid>...]`
+Wait for the given background jobs to finish, or for all of them if none are given. Fails if the last job waited for exited with a non-zero status, so `wait && echo ok` works as expected.
+```
+wait
+wait %1
 ```
 
 #### `title <text>`

@@ -773,6 +773,54 @@ def _parse_redirects(raw):
     return stage
 
 
+def _split_command_list(line):
+    """Split *line* on unquoted '&&' and '&' into (segment, background) pairs.
+
+    '&&' separates commands that run sequentially in the foreground; a single
+    '&' terminates a command that is started in the background (bash-style
+    'emacs file.txt &').  An '&' that is part of a redirect ('&>', '&>>',
+    '>&') is left alone.  Empty segments are dropped.
+    """
+    parts = []
+    current = []
+    in_quote = False
+    in_squote = False
+    i = 0
+    n = len(line)
+
+    def flush(background):
+        seg = "".join(current).strip()
+        if seg:
+            parts.append((seg, background))
+        current.clear()
+
+    while i < n:
+        ch = line[i]
+        if ch == "\\" and in_quote and i + 1 < n and line[i + 1] in ('"', "\\"):
+            current.append(line[i:i + 2])
+            i += 2
+            continue
+        if ch == '"' and not in_squote:
+            in_quote = not in_quote
+        elif ch == "'" and not in_quote:
+            in_squote = not in_squote
+        elif ch == "&" and not in_quote and not in_squote:
+            if i + 1 < n and line[i + 1] == "&":
+                flush(False)
+                i += 2
+                continue
+            prev = line[i - 1] if i > 0 else ""
+            nxt = line[i + 1] if i + 1 < n else ""
+            if nxt != ">" and prev != ">":
+                flush(True)
+                i += 1
+                continue
+        current.append(ch)
+        i += 1
+    flush(False)
+    return parts
+
+
 def parse_pipeline(segment):
     """Parse one &&-segment into a list of Stage objects.
 
@@ -974,6 +1022,60 @@ class CommandFailedException(Exception):
     pass
 
 
+class Job:
+    """A command started in the background with a trailing '&'."""
+
+    def __init__(self, job_id, process, command):
+        self.id = job_id
+        self.process = process
+        self.command = command
+
+    def status(self):
+        rc = self.process.poll()
+        if rc is None:
+            return "Running"
+        return "Done" if rc == 0 else f"Exit {rc}"
+
+
+class JobTable:
+    """Background jobs, shared between a shell and its nested child shells."""
+
+    def __init__(self):
+        self.jobs = []
+
+    def add(self, process, command):
+        job_id = max((j.id for j in self.jobs), default=0) + 1
+        job = Job(job_id, process, command)
+        self.jobs.append(job)
+        return job
+
+    def get(self, spec):
+        """Look up a job by '%n', 'n' or pid.  Returns None if not found."""
+        spec = str(spec)
+        try:
+            if spec.startswith("%"):
+                job_id = int(spec[1:])
+                return next((j for j in self.jobs if j.id == job_id), None)
+            num = int(spec)
+        except ValueError:
+            return None
+        for j in self.jobs:
+            if j.id == num or j.process.pid == num:
+                return j
+        return None
+
+    def reap(self):
+        """Remove and return the jobs that have finished."""
+        done = [j for j in self.jobs if j.process.poll() is not None]
+        for j in done:
+            self.jobs.remove(j)
+        return done
+
+    def remove(self, job):
+        if job in self.jobs:
+            self.jobs.remove(job)
+
+
 class Dabshell:
     def __init__(self, parent_shell=None, init_shell=False):
         if parent_shell:
@@ -985,6 +1087,7 @@ class Dabshell:
             self.oute = parent_shell.oute
             self.options = {}
             self.options.update(parent_shell.options)
+            self.jobs = parent_shell.jobs
         else:
             self.cwd = self.canon(".")
             self.title = "dabshell"
@@ -998,6 +1101,7 @@ class Dabshell:
                 "stop-on-error": "on",
             }
             self.scm_override = None
+            self.jobs = JobTable()
             for name in os.environ:
                 self.env.set("env:" + name, os.environ.get(name, ""))
             self.init_cmd(CmdRun())
@@ -1063,6 +1167,8 @@ class Dabshell:
             self.init_cmd(CmdWatch())
             self.init_cmd(CmdXargs())
             self.init_cmd(CmdTime())
+            self.init_cmd(CmdJobs())
+            self.init_cmd(CmdWait())
         self.history = []
         self.history_index = -1
         self.history_current = ""
@@ -1568,6 +1674,7 @@ class Dabshell:
                             pass
                         except Exception as e:
                             self.oute.print(str(e))
+                        self.report_finished_jobs()
                         os.system("")
                         self.outp.write(self.prompt() + "\n")
                         self.line = ""
@@ -1729,55 +1836,17 @@ class Dabshell:
         self.info_pythonproj_cwd = None
         self.info_git_cwd = None
         self.info_venv_cwd = None
-        # Split on && only when not inside a quoted argument
-        def split_and_and(line):
-            parts = []
-            current = ""
-            in_quote = False
-            in_squote = False
-            i = 0
-            while i < len(line):
-                ch = line[i]
-                if ch == '"' and not in_quote and not in_squote:
-                    in_quote = True
-                    current += ch
-                elif ch == '"' and in_quote:
-                    in_quote = False
-                    current += ch
-                elif ch == "'" and not in_quote and not in_squote:
-                    in_squote = True
-                    current += ch
-                elif ch == "'" and in_squote:
-                    in_squote = False
-                    current += ch
-                elif (
-                    not in_quote
-                    and not in_squote
-                    and ch == "&"
-                    and i + 1 < len(line)
-                    and line[i + 1] == "&"
-                ):
-                    parts.append(current)
-                    current = ""
-                    i += 2
-                    # skip optional surrounding spaces
-                    while i < len(line) and line[i] == " ":
-                        i += 1
-                    continue
-                else:
-                    current += ch
-                i += 1
-            parts.append(current)
-            return parts
-
-        cmds = split_and_and(line)
-        for cmd_segment in cmds:
+        cmds = _split_command_list(line)
+        for cmd_segment, background in cmds:
             # Handle 'exit' before pipeline parsing so it returns False cleanly
             if cmd_segment.strip() == "exit":
                 return False
             stages = parse_pipeline(cmd_segment)
             try:
-                self.execute_pipeline(stages, history=history)
+                if background:
+                    self._run_background(stages, cmd_segment.strip())
+                else:
+                    self.execute_pipeline(stages, history=history)
             except CommandFailedException:
                 if self.option_set("stop-on-error"):
                     raise
@@ -1788,6 +1857,54 @@ class Dabshell:
     # ------------------------------------------------------------------
     # Pipeline execution
     # ------------------------------------------------------------------
+
+    def report_finished_jobs(self):
+        """Print a bash-style notice for each background job that ended."""
+        for job in self.jobs.reap():
+            self.oute.print(f"[{job.id}] {job.status():<8} {job.command}")
+
+    def _run_background(self, stages, command):
+        """Start a single external command in the background ('cmd &')."""
+        if len(stages) != 1:
+            self.oute.print("ERR: pipelines cannot be run in the background")
+            raise CommandFailedException()
+        stage = stages[0]
+        outs, oute, to_close = self._resolve_stage_outputs(stage)
+        saved_outs, saved_oute = self.outs, self.oute
+        self.outs, self.oute = outs, oute
+        try:
+            self._dispatch_stage(stage, None, False, background=command)
+        finally:
+            self.outs, self.oute = saved_outs, saved_oute
+            # The child holds its own copy of any redirect file descriptors.
+            for fo in to_close:
+                fo.close()
+
+    def _start_job(self, executable, args, env_overlay, command):
+        """Spawn *executable* detached from the shell and register a Job."""
+        def handle(o):
+            if isinstance(o, (StdOutput, StdError, FileOutput)):
+                o.out.flush()
+                return o.out
+            return subprocess.DEVNULL
+        kwargs = {}
+        if IS_WIN:
+            kwargs["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP
+        else:
+            # Own session/process group: Ctrl+C in the shell does not reach
+            # the job, and it never competes with us for terminal input.
+            kwargs["start_new_session"] = True
+        p = subprocess.Popen(
+            [executable, *args],
+            cwd=self.cwd,
+            env=get_os_env(self.env, env_overlay),
+            stdin=subprocess.DEVNULL,
+            stdout=handle(self.outs),
+            stderr=handle(self.oute),
+            **kwargs,
+        )
+        job = self.jobs.add(p, command)
+        self.oute.print(f"[{job.id}] {p.pid}")
 
     def execute_pipeline(self, stages, history=True):
         """Execute a list of Stage objects connected by pipes.
@@ -1895,8 +2012,12 @@ class Dabshell:
             return cmd, args
         return "scm", []
 
-    def _dispatch_stage(self, stage, stdin_data, history):
-        """Resolve aliases and dispatch a single stage to the right handler."""
+    def _dispatch_stage(self, stage, stdin_data, history, background=None):
+        """Resolve aliases and dispatch a single stage to the right handler.
+
+        background: None for normal execution, otherwise the command text of a
+        job to start in the background (external commands only).
+        """
         if not stage.raw:
             return
         cmd, args = split_command(stage.raw, self)
@@ -1910,6 +2031,20 @@ class Dabshell:
                 cmd_.value + " " + quote_args(args), self,
             )
             cmd_ = self.env.get(cmd)
+
+        if background is not None and (
+            (cmd_ and isinstance(cmd_, Cmd))
+            or cmd == "exit"
+            or cmd.endswith(".dsh")
+            or (not args and os.path.isdir(
+                cmd if os.path.isabs(cmd) else os.path.join(self.cwd, cmd)
+            ))
+        ):
+            self.oute.print(
+                f"ERR: {cmd} is not an external command and cannot be run "
+                "in the background"
+            )
+            raise CommandFailedException()
 
         if cmd_ and isinstance(cmd_, Cmd):
             # Internal command — pass stdin_data via shell.current_stdin
@@ -1939,6 +2074,7 @@ class Dabshell:
             self._run_external(
                 scm_cmd, [*scm_args, script_path, *args], stdin_data, history,
                 env_overlay=stage.env_overlay, scm_runner=True,
+                background=background,
             )
         elif not args and os.path.isdir(
             cmd if os.path.isabs(cmd) else os.path.join(self.cwd, cmd)
@@ -1960,11 +2096,12 @@ class Dabshell:
         else:
             self._run_external(
                 cmd, args, stdin_data, history,
-                env_overlay=stage.env_overlay,
+                env_overlay=stage.env_overlay, background=background,
             )
 
     def _run_external(
         self, cmd, args, stdin_data, history, env_overlay=None, scm_runner=False,
+        background=None,
     ):
         """Run an external process, wiring stdin/stdout/stderr correctly.
 
@@ -1983,6 +2120,11 @@ class Dabshell:
                 self.oute.print(f"ERR: {cmd} not found")
                 raise CommandFailedException()
             if executable.endswith(".dsh"):
+                if background is not None:
+                    self.oute.print(
+                        f"ERR: script {executable} cannot be run in the background"
+                    )
+                    raise CommandFailedException()
                 self.current_stdin = (
                     StringInput(stdin_data) if stdin_data is not None else None
                 )
@@ -2001,7 +2143,12 @@ class Dabshell:
                 self._run_external(
                     scm_cmd, [*scm_args, executable, *args], stdin_data, history,
                     env_overlay=env_overlay, scm_runner=True,
+                    background=background,
                 )
+                return
+
+            if background is not None:
+                self._start_job(executable, args, env_overlay, background)
                 return
 
             stdin_bytes = (
@@ -6759,6 +6906,52 @@ class CmdTime(Cmd):
             shell.oute.print(f"\nreal\t{minutes}m{seconds:.3f}s")
         else:
             shell.oute.print(f"\nreal\t{elapsed:.3f}s")
+
+
+class CmdJobs(Cmd):
+    def __init__(self):
+        Cmd.__init__(self, "jobs")
+
+    def help(self):
+        return "   : list commands started in the background with '&'"
+
+    def execute(self, shell, args):
+        for job in list(shell.jobs.jobs):
+            shell.outs.print(
+                f"[{job.id}] {job.process.pid:<7} {job.status():<8} {job.command}"
+            )
+        # Finished jobs have now been reported; drop them.
+        shell.jobs.reap()
+
+
+class CmdWait(Cmd):
+    def __init__(self):
+        Cmd.__init__(self, "wait")
+
+    def help(self):
+        return (
+            "[%<n>|<pid>...]   : wait for background jobs to finish "
+            "(all jobs if none given)"
+        )
+
+    def execute(self, shell, args):
+        if args:
+            jobs = []
+            for spec in args:
+                job = shell.jobs.get(spec)
+                if job is None:
+                    shell.oute.print(f"ERR: no such job: {spec}")
+                    raise CommandFailedException()
+                jobs.append(job)
+        else:
+            jobs = list(shell.jobs.jobs)
+        rc = 0
+        with shell.inp.cooked():
+            for job in jobs:
+                rc = job.process.wait()
+                shell.jobs.remove(job)
+        if rc != 0:
+            raise CommandFailedException()
 
 
 def dabshell():

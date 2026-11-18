@@ -1716,6 +1716,91 @@ class TestAndAnd(ShellTestCase):
         self.assertIn("&&", out)
 
 
+class TestBackground(ShellTestCase):
+    """Trailing '&' starts external commands in the background."""
+
+    def tearDown(self):
+        for job in list(self.shell.jobs.jobs):
+            job.process.kill()
+            job.process.wait()
+        super().tearDown()
+
+    def _py(self, code):
+        return f'"{sys.executable}" -c "{code}"'
+
+    def test_split_plain(self):
+        self.assertEqual(m._split_command_list("a b"), [("a b", False)])
+
+    def test_split_trailing_ampersand(self):
+        self.assertEqual(m._split_command_list("emacs x.txt &"),
+                         [("emacs x.txt", True)])
+        self.assertEqual(m._split_command_list("emacs x.txt&"),
+                         [("emacs x.txt", True)])
+
+    def test_split_mixed(self):
+        self.assertEqual(
+            m._split_command_list("a & b && c &"),
+            [("a", True), ("b", False), ("c", True)],
+        )
+
+    def test_split_ignores_quoted_and_redirects(self):
+        self.assertEqual(m._split_command_list('print "a & b"'),
+                         [('print "a & b"', False)])
+        self.assertEqual(m._split_command_list("cmd &> out.txt"),
+                         [("cmd &> out.txt", False)])
+        self.assertEqual(m._split_command_list("cmd &>> out.txt &"),
+                         [("cmd &>> out.txt", True)])
+
+    def test_background_runs_and_returns_immediately(self):
+        import time
+        start = time.perf_counter()
+        out, err = self.run_cmd(
+            self._py("import time; time.sleep(5)") + " &"
+        )
+        self.assertLess(time.perf_counter() - start, 3)
+        self.assertRegex(err, r"^\[1\] \d+")
+        self.assertEqual(len(self.shell.jobs.jobs), 1)
+
+    def test_background_redirect_and_wait(self):
+        self.run_cmd(self._py("print(42)") + " > bg.txt &")
+        self.run_cmd("wait")
+        self.assertEqual(self.read_file("bg.txt", "r").strip(), "42")
+        self.assertEqual(self.shell.jobs.jobs, [])
+
+    def test_followed_by_foreground_command(self):
+        out = self.out(self._py("pass") + " & print after")
+        self.assertIn("after", out)
+
+    def test_jobs_lists_running(self):
+        self.run_cmd(self._py("import time; time.sleep(5)") + " &")
+        out = self.out("jobs")
+        self.assertIn("[1]", out)
+        self.assertIn("Running", out)
+
+    def test_finished_job_reported(self):
+        self.run_cmd(self._py("pass") + " &")
+        self.shell.jobs.jobs[0].process.wait()
+        self._err.reset()
+        self.shell.report_finished_jobs()
+        self.assertIn("[1] Done", self._err.value())
+        self.assertEqual(self.shell.jobs.jobs, [])
+
+    def test_wait_failed_job(self):
+        self.run_cmd(self._py("import sys; sys.exit(3)") + " &")
+        self.shell.options["stop-on-error"] = "on"
+        with self.assertRaises(m.CommandFailedException):
+            self.shell.execute("wait %1", history=False)
+
+    def test_internal_command_rejected(self):
+        err = self.err("print hi &")
+        self.assertIn("cannot be run in the background", err)
+        self.assertEqual(self.shell.jobs.jobs, [])
+
+    def test_pipeline_rejected(self):
+        err = self.err(self._py("pass") + " | sort &")
+        self.assertIn("pipelines cannot be run in the background", err)
+
+
 # ═════════════════════════════════════════════════════════════════════════════
 # 16. Scripting — if / for / while / def / source / nested
 # ═════════════════════════════════════════════════════════════════════════════
