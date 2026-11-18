@@ -1167,6 +1167,308 @@ class TestLess(ShellTestCase):
         self.run_cmd("less big.txt")
 
 
+class _OutOfKeys(BaseException):
+    """Raised by _KeyFeeder when a scripted editor session runs dry."""
+
+
+class _KeyFeeder:
+    """Stub for RawInput that replays a list of keys."""
+    editor_keys = False
+
+    def __init__(self, keys):
+        self.keys = list(keys)
+
+    def getch(self):
+        if not self.keys:
+            raise _OutOfKeys()
+        return self.keys.pop(0)
+
+
+def _keys(*items):
+    """Flatten strings into single-char keys; other items pass through."""
+    out = []
+    for it in items:
+        if isinstance(it, str):
+            out.extend(it)
+        else:
+            out.append(it)
+    return out
+
+
+class TestEditor(ShellTestCase):
+    C_X = m.KEY_CTRL_X
+    SAVE = [m.KEY_CTRL_X, m.KEY_CTRL_S]
+    QUIT = [m.KEY_CTRL_X, m.KEY_CTRL_C]
+
+    def setUp(self):
+        super().setUp()
+        from dabshell import editor as ed
+        self.ed = ed
+
+    def editor(self, *files, keys=()):
+        out = _CapturingOutput()
+        e = self.ed.Editor(
+            self.shell, _KeyFeeder(keys), out,
+            size_fn=lambda: os.terminal_size((40, 10)),
+        )
+        for f in files:
+            e.open_file(f)
+        if e.buffers:
+            e.select(e.buffers[0])
+        return e
+
+    def session(self, *files, keys):
+        e = self.editor(*files, keys=keys)
+        e.run()
+        return e
+
+    # ── Buffer model ─────────────────────────────────────────────────────────
+
+    def test_insert_delete_multiline(self):
+        b = self.ed.Buffer("t")
+        end = b.insert(0, 0, "ab\ncd\nef")
+        self.assertEqual(b.lines, ["ab", "cd", "ef"])
+        self.assertEqual(end, (2, 2))
+        self.assertEqual(b.delete((0, 1), (2, 1)), "b\ncd\ne")
+        self.assertEqual(b.lines, ["af"])
+
+    def test_word_motion(self):
+        b = self.ed.Buffer("t")
+        b.insert(0, 0, "foo bar_baz\n  qux")
+        self.assertEqual(b.word_forward(0, 0), (0, 3))
+        self.assertEqual(b.word_forward(0, 3), (0, 11))
+        self.assertEqual(b.word_forward(0, 11), (1, 5))
+        self.assertEqual(b.word_backward(1, 5), (1, 2))
+        self.assertEqual(b.word_backward(1, 2), (0, 4))
+
+    def test_undo_restores_text_and_modified(self):
+        b = self.ed.Buffer("t")
+        self.assertFalse(b.modified)
+        b.begin_group()
+        b.insert(0, 0, "hello")
+        self.assertTrue(b.modified)
+        b.begin_group()
+        b.delete((0, 0), (0, 2))
+        self.assertEqual(b.lines, ["llo"])
+        b.undo()
+        self.assertEqual(b.lines, ["hello"])
+        b.undo()
+        self.assertEqual(b.lines, [""])
+        self.assertFalse(b.modified)
+
+    def test_search_wraps_and_folds_case(self):
+        b = self.ed.Buffer("t")
+        b.insert(0, 0, "Alpha\nbeta\nALPHA")
+        self.assertEqual(b.search("alpha", 1, 0), (2, 0))
+        self.assertEqual(b.search("alpha", 2, 1), (0, 0))
+        self.assertIsNone(b.search("Alpha", 1, 0, wrap=False))
+        self.assertEqual(b.search("beta", 2, 5, forward=False), (1, 0))
+
+    # ── loading / saving ─────────────────────────────────────────────────────
+
+    def test_save_preserves_crlf(self):
+        self.write_file("crlf.txt", b"one\r\ntwo\r\n")
+        self.session("crlf.txt", keys=_keys("x", *self.SAVE, *self.QUIT))
+        self.assertEqual(self.read_file("crlf.txt"), b"xone\r\ntwo\r\n")
+
+    def test_save_preserves_bom_and_missing_newline(self):
+        self.write_file("bom.txt", b"\xef\xbb\xbfhi")
+        self.session("bom.txt", keys=_keys(m.KEY_CTRL_E, "!",
+                                           *self.SAVE, *self.QUIT))
+        self.assertEqual(self.read_file("bom.txt"), b"\xef\xbb\xbfhi!")
+
+    def test_save_preserves_latin1(self):
+        self.write_file("l1.txt", "caf\xe9\n".encode("latin-1"))
+        self.session("l1.txt", keys=_keys(m.KEY_CTRL_E, "s",
+                                          *self.SAVE, *self.QUIT))
+        self.assertEqual(self.read_file("l1.txt"), "caf\xe9s\n".encode("latin-1"))
+
+    def test_new_file_created_on_save(self):
+        self.session("new.txt", keys=_keys("hello", *self.SAVE, *self.QUIT))
+        self.assertEqual(self.read_file("new.txt"), b"hello\n")
+
+    def test_binary_refused(self):
+        self.write_file("bin.dat", bytes(range(256)))
+        with self.assertRaises(self.ed.EditorError):
+            self.editor("bin.dat")
+
+    def test_scratch_save_prompts_for_name(self):
+        self.session(keys=_keys("abc", *self.SAVE, "out.txt", m.KEY_CR,
+                                *self.QUIT))
+        self.assertEqual(self.read_file("out.txt"), b"abc\n")
+
+    # ── key-driven sessions ──────────────────────────────────────────────────
+
+    def test_quit_without_saving(self):
+        self.write_file("a.txt", "orig\n")
+        e = self.session("a.txt", keys=_keys("zzz", *self.QUIT, "n"))
+        self.assertFalse(e.running)
+        self.assertEqual(self.read_file("a.txt"), b"orig\n")
+
+    def test_quit_cancel_keeps_running(self):
+        self.write_file("a.txt", "orig\n")
+        e = self.editor("a.txt", keys=_keys("z", *self.QUIT, "q"))
+        with self.assertRaises(_OutOfKeys):
+            e.run()
+        self.assertTrue(e.running)
+
+    def test_kill_line_appends_and_yank(self):
+        self.write_file("k.txt", "one\ntwo\nthree\n")
+        self.session("k.txt", keys=_keys(
+            m.KEY_CTRL_K, m.KEY_CTRL_K, m.KEY_CTRL_K,   # "one\ntwo"
+            m.KEY_CTRL_N, m.KEY_CTRL_Y,
+            *self.SAVE, *self.QUIT))
+        # lines are now ["", "three"]; the yank lands at the start of "three"
+        self.assertEqual(self.read_file("k.txt", "r"), "\none\ntwothree\n")
+
+    def test_region_kill_and_undo(self):
+        self.write_file("r.txt", "hello world\n")
+        e = self.session("r.txt", keys=_keys(
+            m.KEY_CTRL_SPACE, ("meta", "f"), m.KEY_CTRL_W,
+            *self.SAVE, m.KEY_CTRL_UNDERSCORE, *self.QUIT, "n"))
+        self.assertEqual(self.read_file("r.txt"), b" world\n")
+        self.assertEqual(e.cur.lines, ["hello world"])
+
+    def test_typing_undoes_as_word_groups(self):
+        e = self.session(keys=_keys("foo bar", m.KEY_CTRL_UNDERSCORE,
+                                    *self.QUIT, "n"))
+        self.assertEqual(e.buffers[0].lines, ["foo "])
+
+    def test_esc_prefix_is_meta(self):
+        self.write_file("w.txt", "alpha beta\n")
+        e = self.session("w.txt", keys=_keys(m.KEY_ESC, "f", "X",
+                                             *self.QUIT, "n"))
+        self.assertEqual(e.cur.lines[0], "alphaX beta")
+
+    def test_newline_keeps_indent(self):
+        e = self.session(keys=_keys("    x", m.KEY_CR, "y", *self.QUIT, "n"))
+        self.assertEqual(e.cur.lines, ["    x", "    y"])
+
+    def test_paste_does_not_indent(self):
+        e = self.session(keys=_keys("    x", m.KEY_PASTE_START, m.KEY_CR,
+                                    "y", m.KEY_PASTE_END, *self.QUIT, "n"))
+        self.assertEqual(e.cur.lines, ["    x", "y"])
+
+    def test_isearch_moves_cursor(self):
+        self.write_file("s.txt", "abc\nfoo bar\nfoo baz\n")
+        e = self.session("s.txt", keys=_keys(
+            m.KEY_CTRL_S, "foo", m.KEY_CTRL_S, m.KEY_CR, *self.QUIT))
+        self.assertEqual((e.cur.row, e.cur.col), (2, 3))
+
+    def test_isearch_cancel_restores(self):
+        self.write_file("s.txt", "abc\nfoo\n")
+        e = self.session("s.txt", keys=_keys(
+            m.KEY_CTRL_S, "foo", m.KEY_CTRL_G, *self.QUIT))
+        self.assertEqual((e.cur.row, e.cur.col), (0, 0))
+
+    def test_query_replace(self):
+        self.write_file("q.txt", "a x a x a\n")
+        self.session("q.txt", keys=_keys(
+            ("meta", "%"), "a", m.KEY_CR, "b", m.KEY_CR, "y", "n", "y",
+            *self.SAVE, *self.QUIT))
+        self.assertEqual(self.read_file("q.txt"), b"b x a x b\n")
+
+    def test_query_replace_all(self):
+        self.write_file("q.txt", "a a a\n")
+        self.session("q.txt", keys=_keys(
+            ("meta", "%"), "a", m.KEY_CR, "bb", m.KEY_CR, "!",
+            *self.SAVE, *self.QUIT))
+        self.assertEqual(self.read_file("q.txt"), b"bb bb bb\n")
+
+    def test_switch_buffers(self):
+        self.write_file("one.txt", "1\n")
+        self.write_file("two.txt", "2\n")
+        e = self.session("one.txt", "two.txt", keys=_keys(
+            self.C_X, "b", m.KEY_CR, "!", *self.QUIT, "y", "y"))
+        self.assertEqual(e.cur.name, "two.txt")
+        self.assertEqual(self.read_file("two.txt"), b"!2\n")
+        self.assertEqual(self.read_file("one.txt"), b"1\n")
+
+    def test_find_file_opens_buffer(self):
+        self.write_file("other.txt", "o\n")
+        e = self.session(keys=_keys(self.C_X, m.KEY_CTRL_F, "oth", m.KEY_TAB,
+                                    m.KEY_CR, *self.QUIT))
+        self.assertEqual(e.cur.name, "other.txt")
+        self.assertEqual(e.cur.lines, ["o"])
+
+    def test_goto_line(self):
+        self.write_file("g.txt", "\n".join(str(i) for i in range(50)) + "\n")
+        e = self.session("g.txt", keys=_keys(("meta", "g"), "g", "30",
+                                             m.KEY_CR, *self.QUIT))
+        self.assertEqual(e.cur.row, 29)
+
+    def test_undefined_key_message(self):
+        e = self.editor(keys=_keys(self.C_X, "z"))
+        with self.assertRaises(_OutOfKeys):
+            e.run()
+        self.assertIn("C-x z is undefined", e.message)
+
+    # ── rendering ────────────────────────────────────────────────────────────
+
+    def test_render_modeline_and_long_line(self):
+        self.write_file("long.txt", "x" * 100 + "\nshort\n")
+        e = self.editor("long.txt")
+        e.render()
+        self.assertIn("long.txt", e.last_frame)
+        self.assertIn("L1 C0", e.last_frame)
+        self.assertIn("x" * 38 + "$", e.last_frame)
+
+    def test_render_scrolls_to_cursor(self):
+        self.write_file("many.txt", "\n".join(f"line{i}" for i in range(100)))
+        e = self.editor("many.txt")
+        e.cur.row = 60
+        e.render()
+        self.assertIn("line60", e.last_frame)
+        self.assertNotIn("line0\x1b", e.last_frame)
+
+    # ── command ──────────────────────────────────────────────────────────────
+
+    def test_edit_refuses_without_terminal(self):
+        err = self.err("edit foo.txt")
+        self.assertIn("interactive terminal", err)
+
+    def test_edit_command_runs_editor(self):
+        self.shell.inp = _KeyFeeder(_keys("hi", *self.SAVE, *self.QUIT))
+        orig = m.CmdEdit._interactive
+        m.CmdEdit._interactive = lambda self_, shell: True
+        orig_vt = m._VT_ENABLED
+        m._VT_ENABLED = True
+        try:
+            self.run_cmd("edit cmd.txt")
+        finally:
+            m.CmdEdit._interactive = orig
+            m._VT_ENABLED = orig_vt
+        self.assertEqual(self.read_file("cmd.txt"), b"hi\n")
+
+    # ── RawInput decoding ────────────────────────────────────────────────────
+
+    def _raw(self, data, editor_keys):
+        ri = m.RawInput.__new__(m.RawInput)
+        ri._fd = None
+        ri.editor_keys = editor_keys
+        buf = list(data)
+        ri._read_byte = lambda: buf.pop(0)
+        return ri
+
+    @unittest.skipIf(m.IS_WIN, "Linux key decoding")
+    def test_rawinput_meta_keys(self):
+        orig = m.select.select
+        m.select.select = lambda r, w, x, t: (r, [], [])
+        try:
+            self.assertEqual(self._raw(b"\x1bx", True).getch(), ("meta", "x"))
+            self.assertEqual(self._raw(b"\x1b\x7f", True).getch(),
+                             ("meta", m.KEY_BACKSPACE))
+            self.assertEqual(self._raw(b"\x1bx", False).getch(), m.KEY_ESC)
+            self.assertEqual(self._raw(b"\x1b[200~", True).getch(),
+                             m.KEY_PASTE_START)
+        finally:
+            m.select.select = orig
+        self.assertEqual(self._raw(b"\x00", True).getch(), m.KEY_CTRL_SPACE)
+        self.assertEqual(self._raw(b"\x1f", True).getch(),
+                         m.KEY_CTRL_UNDERSCORE)
+        self.assertEqual(self._raw(b"\x00", False).getch(), "\x00")
+
+
 # ═════════════════════════════════════════════════════════════════════════════
 # 7. File operations: cp, mv, rm, touch, mkdir, rmdir
 # ═════════════════════════════════════════════════════════════════════════════

@@ -72,6 +72,11 @@ KEY_CTRL_LEFT = -15
 KEY_CTRL_RIGHT = -16
 KEY_CTRL_UP = -17
 KEY_CTRL_DOWN = -18
+# Only produced while RawInput.editor_keys is True (used by the editor).
+KEY_CTRL_SPACE = -19
+KEY_CTRL_UNDERSCORE = -20
+KEY_PASTE_START = -21
+KEY_PASTE_END = -22
 
 KEY_CTRL_A = -101
 KEY_CTRL_B = -102
@@ -102,6 +107,12 @@ KEY_CTRL_Z = -126
 
 
 class RawInput:
+    # When True, getch() additionally reports Alt/Meta keys as ("meta", key),
+    # Ctrl+Space / Ctrl+_ as KEY_CTRL_SPACE / KEY_CTRL_UNDERSCORE and bracketed
+    # paste markers.  The editor turns this on; the shell line editor keeps
+    # the classic behaviour.
+    editor_keys = False
+
     def __init__(self):
         # On Linux we put the terminal into raw mode once and leave it there
         # for the whole session, rather than toggling on every keypress.
@@ -173,6 +184,8 @@ class RawInput:
                 return KEY_ESC
             elif 1 <= n <= 26:   # Ctrl+A .. Ctrl+Z  (exclude 0 = Ctrl+Space)
                 return -100 - n
+            elif n == 0x1f and self.editor_keys:
+                return KEY_CTRL_UNDERSCORE
             else:
                 return ch
         else:
@@ -248,8 +261,17 @@ class RawInput:
                     # Any other byte after ESC [ 1 — consume and return ESC
                     return KEY_ESC
                 elif n == 0x32:
-                    self._read_byte()           # consume trailing ~
-                    return KEY_ESC              # Insert key — not used, return ESC
+                    next_n = self._read_byte()
+                    if next_n == 0x7e:          # ESC [ 2 ~  →  Insert (unused)
+                        return KEY_ESC
+                    if next_n == 0x30:          # ESC [ 2 0 0 ~ / ESC [ 2 0 1 ~
+                        kind = self._read_byte()
+                        self._read_byte()       # consume trailing ~
+                        if kind == 0x30:
+                            return KEY_PASTE_START
+                        if kind == 0x31:
+                            return KEY_PASTE_END
+                    return KEY_ESC
                 elif n == 0x33:
                     self._read_byte()           # consume trailing ~
                     return KEY_DELETE
@@ -273,6 +295,13 @@ class RawInput:
                 # return ESC so the caller gets a safe non-None value.
                 return KEY_ESC
 
+            if self.editor_keys:
+                # Alt+<key> arrives as ESC <key>.
+                if n == 0x7f:
+                    return ("meta", KEY_BACKSPACE)
+                if 0x20 <= n < 0x7f:
+                    return ("meta", chr(n))
+
             # Unknown byte after ESC — return ESC, byte already consumed.
             return KEY_ESC
 
@@ -286,6 +315,10 @@ class RawInput:
             return KEY_CR
         elif 1 <= n <= 26:  # Ctrl+A .. Ctrl+Z  (exclude 0 = Ctrl+Space)
             return -100 - n
+        elif n == 0x0 and self.editor_keys:
+            return KEY_CTRL_SPACE
+        elif n == 0x1f and self.editor_keys:
+            return KEY_CTRL_UNDERSCORE
         elif n < 0x80:
             return chr(n)
         else:
@@ -1137,6 +1170,7 @@ class Dabshell:
             self.init_cmd(CmdZip())
             self.init_cmd(CmdOpen())
             self.init_cmd(CmdLess())
+            self.init_cmd(CmdEdit())
             self.init_cmd(CmdCp())
             self.init_cmd(CmdMv())
             self.init_cmd(CmdRm())
@@ -6061,6 +6095,51 @@ class CmdLess(Cmd):
                 shell.outs.write("\033[2J\033[H")
             else:
                 shell.outs.write("\n")
+
+
+class CmdEdit(Cmd):
+    def __init__(self):
+        Cmd.__init__(self, "edit")
+
+    def help(self):
+        return (
+            "[<file>...]   : edit files in a small emacs-style editor "
+            "(C-x C-s save, C-x C-c quit)"
+        )
+
+    def _interactive(self, shell):
+        out = getattr(shell.outs, "out", None)
+        try:
+            return (
+                isinstance(shell.outs, StdOutput)
+                and out is not None and out.isatty()
+                and sys.stdin.isatty()
+            )
+        except (AttributeError, ValueError):
+            return False
+
+    def execute(self, shell, args):
+        if shell.current_stdin is not None:
+            shell.oute.print("ERR: edit cannot read from a pipe")
+            raise CommandFailedException()
+        if not _VT_ENABLED or not self._interactive(shell):
+            shell.oute.print("ERR: edit needs an interactive terminal")
+            raise CommandFailedException()
+        from .editor import Editor, EditorError
+        editor = Editor(shell, shell.inp, shell.outs)
+        for arg in args:
+            try:
+                editor.open_file(arg)
+            except EditorError as e:
+                shell.oute.print(f"ERR: {e}")
+                raise CommandFailedException()
+            except OSError as e:
+                shell.oute.print(f"ERR: {arg}: {e.strerror or e}")
+                raise CommandFailedException()
+        if editor.buffers:
+            editor.select(editor.buffers[0])
+            editor.prev = editor.buffers[1] if len(editor.buffers) > 1 else None
+        editor.run()
 
 
 class CmdDate(Cmd):

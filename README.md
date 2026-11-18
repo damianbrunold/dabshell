@@ -350,6 +350,30 @@ cat build.log | grep -i warning
 grep "def " src/ -i
 ```
 
+### Editor
+
+#### `edit [<file>...]`
+Open one or more files in a small full-screen editor with emacs key bindings. It is meant for quick edits without leaving the shell. Files that don't exist yet are created on the first save. With no arguments it opens an empty `*scratch*` buffer, and saving it asks for a file name.
+```
+edit notes.txt
+edit src/app.py README.md
+```
+
+Saving keeps the file's encoding (UTF-8, UTF-8 with BOM, or Latin-1), its line endings (LF or CRLF) and whether it ends with a newline. Binary and UTF-16 files are refused. The mode line at the bottom shows the buffer name (`**` if it has unsaved changes), the cursor's line and column, and the encoding and line-ending style.
+
+`M-` means Alt or Esc: press Alt+f, or press Esc and then f. `C-` means Ctrl.
+
+| Area | Keys |
+|---|---|
+| Move | `C-f` `C-b` `C-n` `C-p` or the arrow keys; `C-a` / `C-e` or Home / End for line start/end; `M-f` / `M-b` or Ctrl+arrows for words; `C-v` / `M-v` or PgDn / PgUp to page; `M-<` / `M->` for buffer start/end; `M-g g` to go to a line; `C-l` to recenter |
+| Edit | Type to insert. Enter keeps the current indentation. Tab inserts a tab if the file is indented with tabs, otherwise spaces up to the next multiple of 4. Backspace, `C-d` / Delete, `M-d` / `M-Backspace` (kill word), `C-k` (kill to end of line; repeated presses collect into one kill), `C-y` (yank) |
+| Region | `C-Space` (or `C-x Space`) sets the mark; `C-w` kills the region, `M-w` copies it; `C-x h` selects everything; `C-g` cancels |
+| Undo | `C-/`, `C-_` or `C-x u` |
+| Search | `C-s` / `C-r` incremental search forward/backward. Press again for the next match; Enter accepts, `C-g` returns to where you started. Lower-case searches ignore case. `M-%` query-replace: `y` replace, `n` skip, `!` replace all, `q` stop |
+| Files | `C-x C-s` save, `C-x C-w` save as, `C-x C-f` open a file (Tab completes), `C-x b` switch buffer, `C-x k` close buffer, `C-x C-c` quit (asks about each unsaved buffer) |
+
+Text pasted from the clipboard is inserted as-is, without automatic indentation, on terminals that support bracketed paste.
+
 ### File management
 
 #### `cp <source>... <dest>`
