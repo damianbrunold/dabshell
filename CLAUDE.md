@@ -20,7 +20,7 @@ pip install --force-reinstall dist/dabshell-*.whl
 
 ## Architecture
 
-Almost the entire shell is implemented in a single file: `src/dabshell/__init__.py` (~7,000 lines). The one submodule is `src/dabshell/editor.py`, the full-screen `edit` command (`Buffer` text model, `Editor` session with `cmd_*` commands, `EmacsKeymap`). `CmdEdit` imports it lazily to avoid a circular import. A future vim keymap should map keys onto the same `cmd_*` methods.
+Almost the entire shell is implemented in a single file: `src/dabshell/__init__.py` (~7,000 lines). The one submodule is `src/dabshell/editor.py`, the full-screen `edit` command (`Buffer` text model with undo/redo, `Editor` session with `cmd_*` commands, and two keymaps: `EmacsKeymap` and the modal `VimKeymap` with operators, visual mode and ex commands). `CmdEdit` imports it lazily to avoid a circular import. Keymaps run edits through `Editor.call`/`Editor.execute`, whose undo `kind` controls how consecutive edits are grouped into one undo step.
 
 **Core classes:**
 
@@ -53,4 +53,4 @@ Command resolution order: built-ins → aliases → venv/bin → .venv/bin → c
 
 ## Tests
 
-Tests are in `tests/test_dabshell.py` (~465 tests). They mock `RawInput` to avoid terminal interaction, use temporary directories, and capture output via `_CapturingOutput`. Tests are grouped by feature area (quoting, splitting, expressions, control flow, file ops, etc.).
+Tests are in `tests/test_dabshell.py` (~500 tests). They mock `RawInput` to avoid terminal interaction, use temporary directories, and capture output via `_CapturingOutput`. Tests are grouped by feature area (quoting, splitting, expressions, control flow, file ops, etc.).

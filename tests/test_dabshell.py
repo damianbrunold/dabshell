@@ -1497,6 +1497,320 @@ class TestEditor(ShellTestCase):
         self.assertEqual(self._raw(b"\x00", False).getch(), "\x00")
 
 
+class TestEditorVim(TestEditor):
+    """Vim key bindings.  Inherits the helpers (and re-runs nothing new from
+    TestEditor, see below)."""
+
+    ESC = m.KEY_ESC
+
+    def editor(self, *files, keys=()):
+        e = super().editor(*files, keys=keys)
+        e.set_keymap("vim", quiet=True)
+        if not e.buffers:
+            e.new_buffer("[No Name]")
+        return e
+
+    def ex(self, cmd):
+        return _keys(":", cmd, m.KEY_CR)
+
+    def vim(self, text, keys):
+        """Edit a file containing *text* with *keys*, then :wq; return text."""
+        self.write_file("v.txt", text)
+        self.session("v.txt", keys=_keys(*keys, self.ESC, *self.ex("wq")))
+        return self.read_file("v.txt", "r")
+
+    # ── modes and inserting ──────────────────────────────────────────────────
+
+    def test_insert_and_save_quit(self):
+        self.assertEqual(self.vim("world\n", ["i", "hello ", self.ESC]),
+                         "hello world\n")
+
+    def test_append_and_open_lines(self):
+        self.assertEqual(self.vim("ab\n", ["a", "X", self.ESC]), "aXb\n")
+        self.assertEqual(self.vim("ab\n", ["A", "!", self.ESC]), "ab!\n")
+        self.assertEqual(self.vim("  ab\n", ["o", "c", self.ESC]),
+                         "  ab\n  c\n")
+        self.assertEqual(self.vim("ab\n", ["O", "top", self.ESC]),
+                         "top\nab\n")
+
+    def test_esc_removes_unused_autoindent(self):
+        self.assertEqual(self.vim("  a\nb\n", ["o", self.ESC]), "  a\n\nb\n")
+        self.assertEqual(self.vim("  a\n", ["o", self.ESC, "u"]), "  a\n")
+
+    def test_esc_moves_cursor_left(self):
+        e = self.session(keys=_keys("i", "abc", self.ESC, *self.ex("q!")))
+        self.assertEqual(e.cur.col, 2)
+
+    def test_meta_tuple_is_esc_then_key(self):
+        # Esc followed quickly by a key arrives as ("meta", key): the Esc
+        # leaves insert mode (cursor back on the X) and x deletes it.
+        self.assertEqual(self.vim("ab\n", ["i", "X", ("meta", "x")]), "ab\n")
+
+    def test_normal_keys_do_not_insert(self):
+        self.assertEqual(self.vim("abc\n", ["l", "l"]), "abc\n")
+
+    # ── motions ──────────────────────────────────────────────────────────────
+
+    def test_word_motions(self):
+        e = self.editor()
+        b = e.cur
+        b.insert(0, 0, "foo.bar baz\n\nqux")
+        ed = self.ed
+        self.assertEqual(ed._vim_word_forward(b, 0, 0, False), (0, 3))
+        self.assertEqual(ed._vim_word_forward(b, 0, 0, True), (0, 8))
+        self.assertEqual(ed._vim_word_forward(b, 0, 8, False), (1, 0))
+        self.assertEqual(ed._vim_word_end(b, 0, 0, False), (0, 2))
+        self.assertEqual(ed._vim_word_back(b, 2, 0, False), (1, 0))
+        self.assertEqual(ed._vim_word_back(b, 0, 8, False), (0, 4))
+
+    def test_counts_and_line_motions(self):
+        self.write_file("g.txt", "\n".join(f"  l{i}" for i in range(20)) + "\n")
+        e = self.session("g.txt", keys=_keys("5", "G", *self.ex("q")))
+        self.assertEqual((e.cur.row, e.cur.col), (4, 2))
+        e = self.session("g.txt", keys=_keys("3", "j", "$", *self.ex("q")))
+        self.assertEqual((e.cur.row, e.cur.col), (3, 3))
+        e = self.session("g.txt", keys=_keys("G", "g", "g", *self.ex("q")))
+        self.assertEqual(e.cur.row, 0)
+
+    def test_find_char(self):
+        self.write_file("f.txt", "a,b,c,d\n")
+        e = self.session("f.txt", keys=_keys("f", ",", ";", *self.ex("q")))
+        self.assertEqual(e.cur.col, 3)
+
+    def test_ex_goto_line(self):
+        self.write_file("g.txt", "\n".join("x" * 5 for _ in range(10)))
+        e = self.session("g.txt", keys=_keys(*self.ex("7"), *self.ex("q")))
+        self.assertEqual(e.cur.row, 6)
+
+    # ── operators ────────────────────────────────────────────────────────────
+
+    def test_dd_and_count(self):
+        self.assertEqual(self.vim("1\n2\n3\n4\n", ["j", "2", "d", "d"]),
+                         "1\n4\n")
+        self.assertEqual(self.vim("1\n2\n", ["G", "d", "d"]), "1\n")
+
+    def test_dw_cw_de(self):
+        self.assertEqual(self.vim("foo bar baz\n", ["d", "w"]), "bar baz\n")
+        self.assertEqual(self.vim("foo bar\n", ["c", "w", "X", self.ESC]),
+                         "X bar\n")
+        self.assertEqual(self.vim("foo bar\n", ["d", "e"]), " bar\n")
+        self.assertEqual(self.vim("foo bar\nz\n", ["d", "2", "w"]), "\nz\n")
+
+    def test_dw_at_end_of_line_keeps_newline(self):
+        self.assertEqual(self.vim("foo\nbar\n", ["d", "w"]), "\nbar\n")
+
+    def test_D_C_x_X_r_tilde(self):
+        self.assertEqual(self.vim("abcdef\n", ["l", "l", "D"]), "ab\n")
+        self.assertEqual(self.vim("abcdef\n", ["l", "C", "Z", self.ESC]),
+                         "aZ\n")
+        self.assertEqual(self.vim("abcdef\n", ["3", "x"]), "def\n")
+        self.assertEqual(self.vim("abcdef\n", ["$", "X"]), "abcdf\n")
+        self.assertEqual(self.vim("abc\n", ["r", "z"]), "zbc\n")
+        self.assertEqual(self.vim("abc\n", ["2", "~"]), "ABc\n")
+
+    def test_dj_and_dG_linewise(self):
+        self.assertEqual(self.vim("1\n2\n3\n", ["d", "j"]), "3\n")
+        self.assertEqual(self.vim("1\n2\n3\n", ["j", "d", "G"]), "1\n")
+
+    def test_cc_keeps_indent(self):
+        self.assertEqual(self.vim("  old\nx\n", ["c", "c", "new", self.ESC]),
+                         "  new\nx\n")
+
+    def test_yank_and_paste(self):
+        self.assertEqual(self.vim("a\nb\n", ["y", "y", "p"]), "a\na\nb\n")
+        self.assertEqual(self.vim("a\nb\n", ["j", "y", "y", "P"]),
+                         "a\nb\nb\n")
+        self.assertEqual(self.vim("ab\n", ["y", "l", "p"]), "aab\n")
+        self.assertEqual(self.vim("foo bar baz\n", ["d", "w", "w", "P"]),
+                         "bar foo baz\n")
+        self.assertEqual(self.vim("a\n", ["y", "y", "3", "p"]),
+                         "a\na\na\na\n")
+
+    def test_paste_line_at_end_of_file(self):
+        self.assertEqual(self.vim("a\nb", ["y", "y", "G", "p"]), "a\nb\na")
+
+    def test_join_and_shift(self):
+        self.assertEqual(self.vim("a\n   b\nc\n", ["J"]), "a b\nc\n")
+        self.assertEqual(self.vim("a\nb\nc\n", ["3", "J"]), "a b c\n")
+        self.assertEqual(self.vim("a\nb\n", [">", ">"]), "    a\nb\n")
+        self.assertEqual(self.vim("    a\n", ["<", "<"]), "a\n")
+        self.assertEqual(self.vim("a\nb\n", [">", "j"]), "    a\n    b\n")
+
+    # ── undo / redo ──────────────────────────────────────────────────────────
+
+    def test_insert_session_is_one_undo_step(self):
+        e = self.session(keys=_keys("i", "foo bar", m.KEY_CR, "baz", self.ESC,
+                                    "u", *self.ex("q")))
+        self.assertEqual(e.cur.lines, [""])
+
+    def test_undo_redo(self):
+        self.write_file("u.txt", "a\nb\nc\n")
+        e = self.session("u.txt", keys=_keys(
+            "d", "d", "d", "d", "u", "u", m.KEY_CTRL_R, *self.ex("q!")))
+        self.assertEqual(e.cur.lines, ["b", "c"])
+
+    def test_o_and_typing_undo_together(self):
+        self.assertEqual(self.vim("a\n", ["o", "b", self.ESC, "u"]), "a\n")
+
+    # ── visual mode ──────────────────────────────────────────────────────────
+
+    def test_visual_delete_and_yank(self):
+        self.assertEqual(self.vim("hello world\n", ["v", "e", "d"]),
+                         " world\n")
+        self.assertEqual(self.vim("ab\ncd\nef\n", ["V", "j", "d"]), "ef\n")
+        self.assertEqual(self.vim("ab\ncd\n", ["V", "y", "j", "p"]),
+                         "ab\ncd\nab\n")
+        self.assertEqual(self.vim("abc\n", ["v", "l", "U"]), "ABc\n")
+        self.assertEqual(self.vim("a\nb\n", ["V", "j", ">"]),
+                         "    a\n    b\n")
+
+    def test_visual_change(self):
+        self.assertEqual(self.vim("abc def\n", ["v", "e", "c", "X", self.ESC]),
+                         "X def\n")
+
+    def test_visual_selection_and_render(self):
+        e = self.editor()
+        e.cur.insert(0, 0, "abcdef")
+        e.keymap.handle(e, "l")
+        e.keymap.handle(e, "v")
+        e.keymap.handle(e, "l")
+        self.assertEqual(e.keymap.selection(e), ((0, 1), (0, 3), False))
+        e.render()
+        self.assertIn("a\x1b[7mbc\x1b[27mdef", e.last_frame)
+        self.assertIn("-- VISUAL --", e.last_frame)
+
+    def test_visual_range_substitute(self):
+        self.assertEqual(
+            self.vim("a\na\na\n", ["j", "V", "j", ":", "s/a/b/", m.KEY_CR]),
+            "a\nb\nb\n")
+
+    # ── search ───────────────────────────────────────────────────────────────
+
+    def test_search_and_n(self):
+        self.write_file("s.txt", "foo\nbar foo\nfoo\n")
+        e = self.session("s.txt", keys=_keys("/", "foo", m.KEY_CR, "n",
+                                             *self.ex("q")))
+        self.assertEqual((e.cur.row, e.cur.col), (2, 0))
+        e = self.session("s.txt", keys=_keys("G", "?", "foo", m.KEY_CR,
+                                             *self.ex("q")))
+        self.assertEqual((e.cur.row, e.cur.col), (1, 4))
+
+    def test_search_not_found(self):
+        self.write_file("s.txt", "foo\n")
+        e = self.editor("s.txt", keys=_keys("/", "zzz", m.KEY_CR))
+        with self.assertRaises(_OutOfKeys):
+            e.run()
+        self.assertIn("E486", e.message)
+
+    def test_star_and_dn(self):
+        self.assertEqual(self.vim("x foo y foo\n", ["l", "l", "*", "d", "0"]),
+                         "foo\n")
+
+    # ── ex commands ──────────────────────────────────────────────────────────
+
+    def test_substitute(self):
+        self.assertEqual(self.vim("a a\na\n", [*self.ex("s/a/b/")]),
+                         "b a\na\n")
+        self.assertEqual(self.vim("a a\na\n", [*self.ex("%s/a/b/g")]),
+                         "b b\nb\n")
+        self.assertEqual(self.vim("foo\n", [*self.ex(r"s/o\+/[&]/")]),
+                         "foo\n")   # vim-style \+ is not Python regex
+        self.assertEqual(self.vim("foo\n", [*self.ex("s/o+/[&]/")]),
+                         "f[oo]\n")
+        self.assertEqual(self.vim("a-b\n", [*self.ex(r"s/(\w)-(\w)/\2-\1/")]),
+                         "b-a\n")
+        self.assertEqual(self.vim("x/y\n", [*self.ex(r"s#/#\\#")]), "x\\y\n")
+
+    def test_q_refuses_with_changes(self):
+        self.write_file("a.txt", "a\n")
+        e = self.editor("a.txt", keys=_keys("x", *self.ex("q")))
+        with self.assertRaises(_OutOfKeys):
+            e.run()
+        self.assertTrue(e.running)
+        self.assertIn("E37", e.message)
+
+    def test_q_bang_discards(self):
+        self.write_file("a.txt", "a\n")
+        e = self.session("a.txt", keys=_keys("x", *self.ex("q!")))
+        self.assertFalse(e.running)
+        self.assertEqual(self.read_file("a.txt"), b"a\n")
+
+    def test_ZZ_saves(self):
+        self.write_file("a.txt", "ab\n")
+        self.session("a.txt", keys=_keys("x", "Z", "Z"))
+        self.assertEqual(self.read_file("a.txt"), b"b\n")
+
+    def test_write_copy_keeps_buffer_file(self):
+        self.write_file("a.txt", "ab\n")
+        e = self.session("a.txt", keys=_keys("x", *self.ex("w b.txt"),
+                                             *self.ex("q!")))
+        self.assertEqual(self.read_file("b.txt"), b"b\n")
+        self.assertEqual(self.read_file("a.txt"), b"ab\n")
+        self.assertEqual(e.cur.name, "a.txt")
+
+    def test_buffers_and_edit(self):
+        self.write_file("one.txt", "1\n")
+        self.write_file("two.txt", "22\n")
+        e = self.session("one.txt", keys=_keys(
+            *self.ex("e two.txt"), "x", *self.ex("w"), *self.ex("bp"),
+            *self.ex("q")))
+        self.assertEqual(e.cur.name, "one.txt")
+        self.assertEqual(self.read_file("two.txt"), b"2\n")
+        e = self.session("one.txt", "two.txt", keys=_keys(
+            *self.ex("b 2"), *self.ex("q")))
+        self.assertEqual(e.cur.name, "two.txt")
+
+    def test_unknown_ex_command(self):
+        e = self.editor(keys=_keys(*self.ex("frobnicate")))
+        with self.assertRaises(_OutOfKeys):
+            e.run()
+        self.assertIn("E492", e.message)
+
+    def test_switch_keymaps(self):
+        e = self.editor(keys=_keys(*self.ex("emacs"), "x"))
+        with self.assertRaises(_OutOfKeys):
+            e.run()
+        self.assertEqual(e.keymap.name, "emacs")
+        self.assertEqual(e.cur.lines, ["x"])
+        e = super().editor(keys=_keys(("meta", "x"), "vim-mode", m.KEY_CR, "x"))
+        with self.assertRaises(_OutOfKeys):
+            e.run()
+        self.assertEqual(e.keymap.name, "vim")
+        self.assertEqual(e.cur.lines, [""])
+
+    def test_paste_in_normal_mode_inserts_text(self):
+        self.assertEqual(
+            self.vim("ab\n", [m.KEY_PASTE_START, "dd", m.KEY_PASTE_END, "x"]),
+            "dab\n")
+
+    def test_edit_command_vim_flag_and_option(self):
+        orig = m.CmdEdit._interactive
+        orig_vt = m._VT_ENABLED
+        m.CmdEdit._interactive = lambda self_, shell: True
+        m._VT_ENABLED = True
+        try:
+            self.shell.inp = _KeyFeeder(_keys("i", "hi", self.ESC,
+                                              *self.ex("wq")))
+            self.run_cmd("edit --vim a.txt")
+            self.assertEqual(self.read_file("a.txt"), b"hi\n")
+            self.shell.options["editor-keys"] = "vim"
+            self.shell.inp = _KeyFeeder(_keys("x", *self.ex("wq")))
+            self.run_cmd("edit a.txt")
+            self.assertEqual(self.read_file("a.txt"), b"i\n")
+            self.shell.options["editor-keys"] = "nano"
+            self.assertIn("editor-keys", self.err("edit a.txt"))
+        finally:
+            m.CmdEdit._interactive = orig
+            m._VT_ENABLED = orig_vt
+
+
+# The vim class inherits TestEditor only for its helpers; don't re-run the
+# emacs tests with vim bindings.
+for _name in [n for n in dir(TestEditor) if n.startswith("test_")]:
+    if _name not in TestEditorVim.__dict__:
+        setattr(TestEditorVim, _name, None)
+
+
 # ═════════════════════════════════════════════════════════════════════════════
 # 7. File operations: cp, mv, rm, touch, mkdir, rmdir
 # ═════════════════════════════════════════════════════════════════════════════

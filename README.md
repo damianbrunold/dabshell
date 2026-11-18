@@ -352,8 +352,8 @@ grep "def " src/ -i
 
 ### Editor
 
-#### `edit [<file>...]`
-Open one or more files in a small full-screen editor with emacs key bindings. It is meant for quick edits without leaving the shell. Files that don't exist yet are created on the first save. With no arguments it opens an empty `*scratch*` buffer, and saving it asks for a file name.
+#### `edit [--vim|--emacs] [<file>...]`
+Open one or more files in a small full-screen editor with emacs (default) or vim key bindings. It is meant for quick edits without leaving the shell. To make vim the default, put `option editor-keys vim` in `~/.dabshell`. `--emacs` / `--vim` override the option for one call. Files that don't exist yet are created on the first save. With no arguments it opens an empty `*scratch*` buffer, and saving it asks for a file name.
 ```
 edit notes.txt
 edit src/app.py README.md
@@ -361,7 +361,7 @@ edit src/app.py README.md
 
 Saving keeps the file's encoding (UTF-8, UTF-8 with BOM, or Latin-1), its line endings (LF or CRLF) and whether it ends with a newline. Binary and UTF-16 files are refused. The mode line at the bottom shows the buffer name (`**` if it has unsaved changes), the cursor's line and column, and the encoding and line-ending style.
 
-`M-` means Alt or Esc: press Alt+f, or press Esc and then f. `C-` means Ctrl.
+**Emacs bindings.** `M-` means Alt or Esc: press Alt+f, or press Esc and then f. `C-` means Ctrl.
 
 | Area | Keys |
 |---|---|
@@ -371,6 +371,22 @@ Saving keeps the file's encoding (UTF-8, UTF-8 with BOM, or Latin-1), its line e
 | Undo | `C-/`, `C-_` or `C-x u` |
 | Search | `C-s` / `C-r` incremental search forward/backward. Press again for the next match; Enter accepts, `C-g` returns to where you started. Lower-case searches ignore case. `M-%` query-replace: `y` replace, `n` skip, `!` replace all, `q` stop |
 | Files | `C-x C-s` save, `C-x C-w` save as, `C-x C-f` open a file (Tab completes), `C-x b` switch buffer, `C-x k` close buffer, `C-x C-c` quit (asks about each unsaved buffer) |
+| Other | `M-x` runs a command by name (Tab completes), e.g. `M-x goto-line`; `M-x vim-mode` switches to vim bindings |
+
+**Vim bindings.** The editor starts in normal mode. The current mode is shown at the bottom (`-- INSERT --`, `-- VISUAL --`), and the cursor is a bar in insert mode. Most commands take a count, as in `3dd` or `2w`.
+
+| Area | Keys |
+|---|---|
+| Insert | `i` `a` `I` `A` `o` `O` enter insert mode; Esc (or `C-c`) returns to normal mode. In insert mode Enter keeps the indentation, `C-w` deletes the word before the cursor, and arrow keys move. One insert session undoes as one step |
+| Move | `h` `j` `k` `l` or the arrow keys, `w` `b` `e` (and `W` `B` `E`), `0` `^` `$`, `gg` `G` / `<n>G`, `f` `t` `F` `T` + char with `;` `,` to repeat, `+` `-` Enter, `C-f` `C-b` `C-d` `C-u`, `:<n>` to go to a line |
+| Edit | `x` `X` `r<c>` `~` `J` `>>` `<<`, `dd` `cc` `yy`, `D` `C` `Y` `s` `S`, `p` `P` (whole-line yanks paste as lines), `u` undo, `C-r` redo |
+| Operators | `d` `c` `y` `>` `<` combined with any motion, e.g. `dw`, `c$`, `y2j`, `dG`, `dfx`, `dn` (up to the next search match) |
+| Visual | `v` (characters) or `V` (lines), extended with any motion; then `d`/`x`, `y`, `c`, `>`, `<`, `~`, `u`, `U`, `J`, `o` (other end), or `:` for a command on the selected lines |
+| Search | `/text` and `?text` (plain text; all-lowercase searches ignore case), `n` `N`, `*` `#` for the word under the cursor |
+| Ex commands | `:w [file]`, `:q`, `:q!`, `:wq`, `:x` / `ZZ`, `ZQ`, `:wa`, `:qa[!]`, `:wqa`, `:e file` (`:e!` reloads), `:ls`, `:b <n\|name>`, `:bn`, `:bp`, `:bd[!]`, `:emacs` (switch to emacs bindings) |
+| Replace | `:s/old/new/[gi]` on the current line, `:%s/…/…/g` on all lines, `:'<,'>s/…/…/` on a visual selection, `:5,10s/…/…/` on a line range. `old` is a **Python** regular expression (e.g. `\d+`, `(a)(b)`); in `new`, `&` is the whole match and `\1` a group |
+
+Not supported in vim mode: `.` (repeat), named registers, macros, marks, text objects (`iw`, `a(`), `%`, and `:set`.
 
 Text pasted from the clipboard is inserted as-is, without automatic indentation, on terminals that support bracketed paste.
 
@@ -601,6 +617,7 @@ Get or set a shell option. Without a value, prints the current setting.
 |--------|---------|-------------|
 | `echo` | `off` | When `on`, print each command before executing it |
 | `stop-on-error` | `on` | When `on`, stop script execution if a command fails |
+| `editor-keys` | `emacs` | Key bindings of `edit`: `emacs` or `vim` |
 
 ```
 option echo on

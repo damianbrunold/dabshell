@@ -6095,8 +6095,9 @@ class CmdEdit(Cmd):
 
     def help(self):
         return (
-            "[<file>...]   : edit files in a small emacs-style editor "
-            "(C-x C-s save, C-x C-c quit)"
+            "[--vim|--emacs] [<file>...]   : edit files in a small editor "
+            "with emacs (default) or vim key bindings; "
+            "'option editor-keys vim' makes vim the default"
         )
 
     def _interactive(self, shell):
@@ -6117,9 +6118,21 @@ class CmdEdit(Cmd):
         if not _VT_ENABLED or not self._interactive(shell):
             shell.oute.print("ERR: edit needs an interactive terminal")
             raise CommandFailedException()
-        from .editor import Editor, EditorError
-        editor = Editor(shell, shell.inp, shell.outs)
+        keys = shell.options.get("editor-keys", "emacs")
+        files = []
         for arg in args:
+            if arg in ("--vim", "--emacs"):
+                keys = arg[2:]
+            else:
+                files.append(arg)
+        if keys not in ("emacs", "vim"):
+            shell.oute.print(
+                f"ERR: option editor-keys must be emacs or vim, not {keys}"
+            )
+            raise CommandFailedException()
+        from .editor import Editor, EditorError
+        editor = Editor(shell, shell.inp, shell.outs, keymap=keys)
+        for arg in files:
             try:
                 editor.open_file(arg)
             except EditorError as e:
