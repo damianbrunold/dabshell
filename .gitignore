@@ -1,6 +1,6 @@
+/build/
+/dist/
 /venv/
-/src/dabshell.egg-info
 __pycache__
-/test.py
 /test.dsh
 /*.txt

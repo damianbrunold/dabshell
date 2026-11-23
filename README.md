@@ -1,63 +1,49 @@
 # dabshell
 
-A lightweight, cross-platform interactive shell written in pure Python. dabshell runs on both Windows and Linux/macOS, requires Python 3.11 or later, and has no third-party dependencies. It is designed to be simple, portable, and scriptable, with a syntax that is intentionally less complex than bash.
+A lightweight, cross-platform interactive shell. dabshell is written in [dabscm](https://github.com/damianbrunold/dabscm) Scheme and compiled into a single self-contained native executable, `dsh` (`dsh.exe` on Windows), with the same functionality on Windows and Linux. It needs no runtime, interpreter or libraries. It is designed to be simple, portable, and scriptable, with a syntax that is intentionally less complex than bash.
+
+(The original Python implementation is kept on the `python` branch.)
 
 ---
 
 ## Installation
 
-dabshell is installed from source by cloning the repository, building a wheel, and installing it locally.
+Copy the executable for your platform somewhere on your `PATH`:
 
-### Prerequisites
+- Windows x86-64: `dsh.exe`
+- Linux x86-64: `dsh` (statically linked, runs on any distribution)
+- Linux arm64: `dsh` (e.g. Raspberry Pi OS 64-bit)
 
-- Python 3.11 or higher
-- `pip` and `build` available in your Python environment
-
-### Steps
-
-**1. Clone the repository**
-
-```bash
-git clone https://github.com/damianbrunold/dabshell
-cd dabshell
+```
+dsh                        # interactive shell
+dsh script.dsh [arg...]    # run a script (exit code 1 when an error stopped it)
+dsh -c "command line"      # run one command line
+dsh --version
 ```
 
-**2. Build the wheel**
+Without a terminal (e.g. `echo "ls" | dsh`), dsh executes the lines of its standard input.
+
+### Building from source
+
+You need a checkout of dabscm next to this repository (`../dabscm`) with its native compiler `scmc` built, and Zig 0.17.1 (see `../dabscm/scm-native/README.md`). Alternatively the `dabscm-native` Debian package provides `scmc`.
 
 ```bash
-pip install build       # if not already installed
-python -m build
+scm build.scm              # build/dsh(.exe) for this machine
+scm build.scm windows      # dist/windows-x86_64/dsh.exe
+scm build.scm linux        # dist/linux-x86_64/dsh
+scm build.scm linux-arm64  # dist/linux-arm64/dsh
+scm build.scm all          # all of them (cross-compiling works from any host)
 ```
 
-This produces a `.whl` file in the `dist/` directory (e.g. `dist/dabshell-0.0.4-py3-none-any.whl`).
+`scm` is the dabscm interpreter (e.g. `java -jar ../dabscm/scm-java/scm.jar`); `--scmc PATH` or `$SCMC` selects the compiler. The shell also runs directly from source: `scm bin/dsh.scm`.
 
-**3. Install the wheel**
+### Tests
 
 ```bash
-pip install dist/dabshell-0.0.4-py3-none-any.whl
+scm run-tests.scm          # all tests on the JVM and compiled natively
+scm run-tests.scm java     # JVM only (fast)
+scm run-tests.scm native core text   # selected test files, natively
 ```
-
-Replace 0.0.4 with the current version number.
-
-Once installed, the `dsh` command will be available in your PATH.
-
-Of course, it generally is better to create a local virtual environment and install into this and not in the global one.
-
-### Upgrading
-
-When a new version is available, repeat the build and install steps. To replace the previously installed version, pass the `--force-reinstall` flag:
-
-```bash
-pip install --force-reinstall dist/dabshell-0.0.4-py3-none-any.whl
-```
-
-### Uninstalling
-
-```bash
-pip uninstall dabshell
-```
-
----
 
 ### Startup configuration
 
@@ -242,7 +228,7 @@ python server.py > server.log &
 
 `&` can also separate commands: `make docs & make test` starts `make docs` in the background and then runs `make test` in the foreground. Once a background job ends, a notice like `[1] Done     emacs notes.txt` (or `Exit 2` for a non-zero exit) appears before the next prompt.
 
-Background jobs get no keyboard input (stdin is `/dev/null`) and run in their own process group, so Ctrl+C at the prompt does not stop them. They keep running after you exit dabshell. Their output goes to the terminal unless you redirect it. Only external commands can run in the background: built-ins, `.dsh` scripts and pipelines are rejected with an error.
+Background jobs get no keyboard input and keep running after you exit dabshell. Their output goes to the terminal unless you redirect it; a redirect (`> file`, `>> file`, `&> file`) of a background job receives both its standard output and standard error. Ctrl+C at the prompt does not stop them, but on Windows a Ctrl+C that stops a foreground program can also reach background jobs started from the same console. Only external commands can run in the background: built-ins, `.dsh` scripts and pipelines are rejected with an error.
 
 Use `jobs` to list background jobs and `wait` to block until they finish (see below).
 
@@ -331,13 +317,13 @@ cat README.md | wc
 ```
 
 #### `diff <file1> <file2>`
-Show a unified diff between two text files using Python's `difflib`.
+Show the differences between two text files, line by line: unchanged lines start with two spaces, removed lines with `- `, added lines with `+ `, and `? ` lines mark the changed characters (the format of Python's `difflib.ndiff`).
 ```
 diff old.py new.py
 ```
 
 #### `grep <pattern> [-i] [-v] [-q] [<location>...]`
-Search for a regular expression pattern in files. When no location is given and there is piped input, searches that instead. When no location is given and there is no piped input, searches the current directory recursively.
+Search for a regular expression pattern in files. When no location is given and there is piped input, searches that instead. When no location is given and there is no piped input, searches the current directory recursively. Patterns support the regular expression syntax common to Java and .NET (classes, quantifiers, groups, `(?i)`, lookaround); Python's `(?P<name>...)` groups are accepted too.
 
 Options: `-i` (case-insensitive), `-v` (invert match, show non-matching lines), `-q` (quiet: print only the matched line without filename or line number).
 
@@ -384,7 +370,7 @@ Saving keeps the file's encoding (UTF-8, UTF-8 with BOM, or Latin-1), its line e
 | Visual | `v` (characters) or `V` (lines), extended with any motion; then `d`/`x`, `y`, `c`, `>`, `<`, `~`, `u`, `U`, `J`, `o` (other end), or `:` for a command on the selected lines |
 | Search | `/text` and `?text` (plain text; all-lowercase searches ignore case), `n` `N`, `*` `#` for the word under the cursor |
 | Ex commands | `:w [file]`, `:q`, `:q!`, `:wq`, `:x` / `ZZ`, `ZQ`, `:wa`, `:qa[!]`, `:wqa`, `:e file` (`:e!` reloads), `:ls`, `:b <n\|name>`, `:bn`, `:bp`, `:bd[!]`, `:emacs` (switch to emacs bindings) |
-| Replace | `:s/old/new/[gi]` on the current line, `:%s/…/…/g` on all lines, `:'<,'>s/…/…/` on a visual selection, `:5,10s/…/…/` on a line range. `old` is a **Python** regular expression (e.g. `\d+`, `(a)(b)`); in `new`, `&` is the whole match and `\1` a group |
+| Replace | `:s/old/new/[gi]` on the current line, `:%s/…/…/g` on all lines, `:'<,'>s/…/…/` on a visual selection, `:5,10s/…/…/` on a line range. `old` is a regular expression (e.g. `\d+`, `(a)(b)`); in `new`, `&` is the whole match and `\1` a group |
 
 Not supported in vim mode: `.` (repeat), named registers, macros, marks, text objects (`iw`, `a(`), `%`, and `:set`.
 

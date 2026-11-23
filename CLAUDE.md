@@ -2,55 +2,93 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+dabshell is written in dabscm Scheme (R7RS + dabscm libraries) and compiled
+into a native executable with dabscm native's `scmc`. dabscm lives in
+`../dabscm` (docs: `../dabscm/documentation/libraries/*.md`). The former
+Python implementation is on the `python` branch.
+
 ## Commands
 
+`scm` below is the dabscm interpreter: `java -jar ../dabscm/scm-java/scm.jar`.
+
 ```bash
-# Run tests
-python -m unittest tests/test_dabshell.py
+# Run all tests on the JVM and compiled natively (build/test_*.exe)
+scm run-tests.scm
+scm run-tests.scm java            # JVM only, fast
+scm run-tests.scm native core     # one test file (tests/test_core.scm), natively
 
-# Run a single test
-python -m unittest tests.test_dabshell.TestClassName.test_method_name
+# One test file directly
+java -jar ../dabscm/scm-java/scm.jar tests/test_core.scm
 
-# Build package
-python -m build
+# Build the executable (host: build/dsh(.exe); windows|linux|linux-arm64|all: dist/)
+scm build.scm
+scm build.scm all
 
-# Install built package
-pip install --force-reinstall dist/dabshell-*.whl
+# Run from source
+scm bin/dsh.scm
 ```
+
+Run commands with `</dev/null` and a timeout. When calling `wsl.exe` from
+Git Bash, set `MSYS_NO_PATHCONV=1` (otherwise paths and `$?` get mangled).
+Linux test binaries can be cross-compiled with
+`scmc tests/test_x.scm -I src -I tests -o build/linux/test_x --target x86_64-linux-musl`
+and run under WSL.
 
 ## Architecture
 
-Almost the entire shell is implemented in a single file: `src/dabshell/__init__.py` (~7,000 lines). The one submodule is `src/dabshell/editor.py`, the full-screen `edit` command (`Buffer` text model with undo/redo, `Editor` session with `cmd_*` commands, and two keymaps: `EmacsKeymap` and the modal `VimKeymap` with operators, visual mode and ex commands). `CmdEdit` imports it lazily to avoid a circular import. Keymaps run edits through `Editor.call`/`Editor.execute`, whose undo `kind` controls how consecutive edits are grouped into one undo step.
+Library `(dabshell xxx)` is the file `src/dabshell-xxx.sld`; the program is
+`bin/dsh.scm`, which imports every command library so their commands get
+registered.
 
-**Core classes:**
+- `util` — platform, Python-compatible path functions (`path-join`,
+  `path-normpath`, ...; dabshell does not rely on dabscm's path functions),
+  string helpers, file decoding (UTF-8 / BOM / Latin-1), binary detection.
+- `core` — `env` (lexically scoped variables, aliases and commands share one
+  namespace), command records (`define-command` registers a builtin),
+  `session` (state shared with nested shells: jobs, history, setscm),
+  `shell` (cwd, env, output ports `outs`/`oute`/`outp`, options, piped
+  stdin string), parsing (`replace-vars`, `split-command`, `parse-pipeline`,
+  `split-command-list`), the expression evaluator, `shell-execute`,
+  pipelines, redirects, external programs, background jobs, scripts
+  (`execute-lines`: if/for/while/def).
+- `builtins` — alias, option(s), run, eval, script, source, cd, pwd, set,
+  get, echo, print, history, lhistory, which, title, setscm, reset-term,
+  help, time, jobs, wait.
+- `files`, `text`, `awk`, `data` (json, fetch, tar, zip), `less`,
+  `editor` (+ `editor-buffer`, `editor-core` with the emacs keymap,
+  `editor-vim`) — the other commands.
+- `keys` — key reader (VT sequences on both platforms) → chars, symbols
+  (`'left`, `'ctrl-a`, ...), `(meta . key)`; `with-key-source` for tests.
+- `completion`, `interactive` — tab completion, prompt, line editor,
+  history file, main loop.
 
-- **`RawInput`** — Cross-platform raw terminal input. Windows uses `msvcrt`, Linux/macOS uses `termios`/`select`. Parses escape sequences (CSI/SS3) into unified key events.
-- **`Stage`** — A single command in a pipeline, holding the command name, arguments, and redirection targets.
-- **`Env`** — Lexically-scoped variable/alias environment. Supports parent chaining for nested scopes (e.g., inside `if`/`while`/`def` blocks).
-- **`Dabshell`** — Main shell state: history, prompt rendering, command registration, and the top-level `execute()` method. Interactive loop lives here.
-- **`Cmd`** — Abstract base for all built-in commands. Each subclass (e.g., `CmdLs`, `CmdGrep`, `CmdCd`) implements `run()`.
+**Execution flow:** `shell-execute` → split on `&&`/`&` → `parse-pipeline`
+(stages with redirects and `NAME=value` overlays) → `execute-pipeline`: each
+non-last stage's output is captured into a string and fed as stdin to the
+next → `dispatch-stage`: alias expansion, then builtin / `.dsh` script /
+`.scm` via the scm runner / directory (ls) / external program.
 
-**Execution flow:**
+Command resolution: built-ins → aliases → venv/bin → .venv/bin → cwd → PATH
+(PATHEXT on Windows).
 
-```
-Dabshell.execute(line)
-  → expand variables/quotes
-  → split on && (respecting quotes)
-  → for each part: parse pipeline (stages separated by |)
-  → execute_pipeline(stages)
-      → single stage: _run_stage() directly
-      → multi-stage: chain via subprocess pipes
-  → _run_stage(): resolve command → apply redirections → run
-```
+External programs: inherited console when nothing is piped or redirected
+(`run-program`), otherwise `run-program/capture` (output buffered until the
+program ends). The shell never changes the process cwd; children get
+`work-dir`. Interactive mode switches the terminal to raw mode only while
+reading keys (raw mode disables output post-processing, so raw-mode output
+uses `\r\n`). On native builds `%shutdown-signal` keeps the shell alive
+when Ctrl+C stops a foreground program.
 
-Command resolution order: built-ins → aliases → venv/bin → .venv/bin → cwd → PATH.
+Conventions: Python behaviour was the specification (messages like
+`ERR: ...`, `True`/`False` printing of booleans). Failures raise via
+`(command-failed!)`; output via `println`/`print-to` on the shell's ports.
 
-**Scripting** (`CmdScript`/`CmdSource`): Control flow (`if`, `while`, `for`, `def`) is implemented by reading ahead in the script lines and recursively calling `execute()` within a nested `Env`.
-
-**Expression evaluator**: Token-based recursive descent parser in `_tokenize_expr` / `evaluate_expression`. Operator precedence: `not` > `and` > `or`.
-
-**Prompt** (`Dabshell.prompt()`): Shows venv Python version, project version from `pyproject.toml`, git branch (green=clean/red=dirty via `git status -s -b`), and cwd (truncated from the left).
+`DABSCM-FINDINGS.md` lists dabscm bugs and missing features found during
+the port, with repros; dabshell works around them.
 
 ## Tests
 
-Tests are in `tests/test_dabshell.py` (~500 tests). They mock `RawInput` to avoid terminal interaction, use temporary directories, and capture output via `_CapturingOutput`. Tests are grouped by feature area (quoting, splitting, expressions, control flow, file ops, etc.).
+`tests/test_*.scm` (~1070 checks) use `(scm test)` and `(dabshell testing)`
+(`with-shell` gives a headless shell in a temp directory with captured
+output; `run-cmd`, `out`, `err`, `write-file`, `read-text`). Every test file
+must pass on the JVM and natively (Windows and Linux).
