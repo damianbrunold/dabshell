@@ -154,19 +154,23 @@
              (sorted (cond ((memv #\t opts) (by ls-entry-timestamp string<? (not rev)))
                            ((memv #\S opts) (by ls-entry-size < (not rev)))
                            (else (by ls-entry-name string<? rev))))
-             (color (eq? (shell-outs sh) console-out)))
+             (color (eq? (shell-outs sh) console-out))
+             ;; -h: human-readable sizes ("1.50K") in a narrower column
+             (size-str (if (memv #\h opts)
+                           (lambda (n) (string-pad-left (human-size n) 6))
+                           (lambda (n) (string-pad-left (number->string n) 10)))))
         (for-each
          (lambda (e)
            (let ((pname (if (and color (directory? (ls-entry-path e)))
                             (string-append "\x1b;[34m" (ls-entry-name e) "\x1b;[0m")
                             (ls-entry-name e))))
              (if (memv #\l opts)
-                 (out sh (string-pad-left (number->string (ls-entry-size e)) 10) " "
+                 (out sh (size-str (ls-entry-size e)) " "
                       (ls-entry-timestamp e) " " pname)
                  (out sh pname))))
          sorted)))
 
-    (define-command "ls" "[<dir>]   : lists the contents of the directory"
+    (define-command "ls" "[-lhrtS] [<dir>]   : lists the contents of the directory (-l long, -h human-readable sizes)"
       (lambda (sh args)
         (let loop ((as args) (opts '()) (dirs '()))
           (cond ((pair? as)

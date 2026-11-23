@@ -108,9 +108,15 @@
     (set-file-modification-time! (file-path t "alpha.txt") 1000000000000)
     (test-equal "ls -l timestamp in UTC" "         1 2001-09-09 01:46:40 alpha.txt"
                 (car (filter-lines (out-raw t "ls -l alpha.txt") "alpha.txt")))
+    (test-equal "ls -lh" "    1B 2001-09-09 01:46:40 alpha.txt"
+                (car (filter-lines (out-raw t "ls -lh alpha.txt") "alpha.txt")))
     (set-file-modification-time! (file-path t "beta.py") 1000000000000)
     (test-equal "ls -t newest first" "mydir" (car (lines (out t "ls -t"))))
-    (test-equal "ls -tr oldest first, stable" '("alpha.txt" "beta.py") (take-up-to (lines (out t "ls -tr")) 2)))))
+    (test-equal "ls -tr oldest first, stable" '("alpha.txt" "beta.py") (take-up-to (lines (out t "ls -tr")) 2))))
+  (with-ls (lambda (t)
+    (write-file t "big.txt" (make-string 1536 #\x))
+    (test-assert "ls -lh kilobytes"
+                 (string-starts? (car (filter-lines (out-raw t "ls -l -h big.txt") "big.txt")) " 1.50K ")))))
 
 ;; ── TestDu ──────────────────────────────────────────────────────────────
 
