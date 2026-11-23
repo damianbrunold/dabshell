@@ -14,6 +14,12 @@ Copy the executable for your platform somewhere on your `PATH`:
 - Linux x86-64: `dsh` (statically linked, runs on any distribution)
 - Linux arm64: `dsh` (e.g. Raspberry Pi OS 64-bit)
 
+On Debian, Ubuntu and Raspberry Pi OS you can install the Debian package instead, which puts `dsh` in `/usr/bin` and registers it in `/etc/shells` (so `chsh -s /usr/bin/dsh` works):
+
+```
+sudo apt install ./dabshell_<version>_amd64.deb    # or _arm64.deb
+```
+
 ```
 dsh                        # interactive shell
 dsh script.dsh [arg...]    # run a script (exit code 1 when an error stopped it)
@@ -33,7 +39,10 @@ scm build.scm windows      # dist/windows-x86_64/dsh.exe
 scm build.scm linux        # dist/linux-x86_64/dsh
 scm build.scm linux-arm64  # dist/linux-arm64/dsh
 scm build.scm all          # all of them (cross-compiling works from any host)
+scm build.scm deb          # dist/dabshell_<version>_{amd64,arm64}.deb
 ```
+
+`deb` builds both Linux executables and packages them (`--no-build` packages the ones already in `dist/`). The version comes from `bin/dsh.scm`, the maintainer from `git config user.name` / `user.email`.
 
 `scm` is the dabscm interpreter (e.g. `java -jar ../dabscm/scm-java/scm.jar`); `--scmc PATH` or `$SCMC` selects the compiler. The shell also runs directly from source: `scm bin/dsh.scm`.
 

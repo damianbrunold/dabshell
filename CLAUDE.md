@@ -23,6 +23,7 @@ java -jar ../dabscm/scm-java/scm.jar tests/test_core.scm
 # Build the executable (host: build/dsh(.exe); windows|linux|linux-arm64|all: dist/)
 scm build.scm
 scm build.scm all
+scm build.scm deb                 # dist/dabshell_<version>_{amd64,arm64}.deb via (scm deb)
 
 # Run from source
 scm bin/dsh.scm
