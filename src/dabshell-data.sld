@@ -54,7 +54,8 @@
                   (number->string (- pos last-nl)) " (char " (number->string pos) ")"))))
 
     ;; a string of one code point (integer->char of dabscm on the JVM
-    ;; truncates code points above #xFFFF)
+    ;; raises for code points above #xFFFF; utf8->string gives a pair of
+    ;; UTF-16 surrogates there)
     (define (codepoint->string cp)
       (if (< cp #x10000)
           (string (integer->char cp))
@@ -388,7 +389,7 @@
                                    (let ((kv (string-split-on h ":" 1)))
                                      (cons (string-strip (car kv)) (string-strip (cadr kv)))))
                                  headers))
-                     (resp (http-get-bytevector url alist (max 1 (exact (ceiling timeout)))))
+                     (resp (http-get-bytevector url alist timeout))
                      (status (http-response-status resp)))
                 (unless (<= 200 status 299)
                   (fail "HTTP Error " (number->string status) ": "
@@ -871,9 +872,8 @@
               (when (pair? files)
                 (let ((name (zip-arcname (cdar files))))
                   (unless (member name seen)
-                    (let ((port (zip-add-binary-entry z name (mtime-seconds (caar files)))))
-                      (write-bytevector (read-file-bytes (caar files)) port)
-                      (flush-output-port port)))
+                    (write-bytevector (read-file-bytes (caar files))
+                                      (zip-add-binary-entry z name (mtime-seconds (caar files)))))
                   (loop (cdr files) (cons name seen)))))))))
 
     (define (zip-names archive-path)

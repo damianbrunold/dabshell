@@ -27,9 +27,7 @@
     ;; Ctrl+C: a child process gets it; the shell must survive it
 
     (define (install-interrupt-handler!)
-      (cond-expand
-        (dabscm-native ((%primitive "%shutdown-signal")))
-        (else #f)))
+      (set-interrupt-handler! 'record))
 
     ;; ------------------------------------------------------------------
     ;; the prompt: venv python version, project version, git branch, cwd

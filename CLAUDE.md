@@ -72,12 +72,14 @@ next → `dispatch-stage`: alias expansion, then builtin / `.dsh` script /
 Command resolution: built-ins → aliases → venv/bin → .venv/bin → cwd → PATH
 (PATHEXT on Windows).
 
-External programs: inherited console when nothing is piped or redirected
-(`run-program`), otherwise `run-program/capture` (output buffered until the
-program ends). The shell never changes the process cwd; children get
+External programs: `run-program` with the inherited console, piped input
+as `'stdin` and redirect files as `'stdout`/`'stderr` (the program writes
+them itself); output into a pipeline uses `run-program/capture`
+(buffered until the program ends). Background jobs: `start-program` with
+`'new-group`. The shell never changes the process cwd; children get
 `work-dir`. Interactive mode switches the terminal to raw mode only while
 reading keys (raw mode disables output post-processing, so raw-mode output
-uses `\r\n`). On native builds `%shutdown-signal` keeps the shell alive
+uses `\r\n`). `(set-interrupt-handler! 'record)` keeps the shell alive
 when Ctrl+C stops a foreground program.
 
 Conventions: Python behaviour was the specification (messages like

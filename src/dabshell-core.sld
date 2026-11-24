@@ -672,10 +672,7 @@
                 (else (loop (cdr cs))))))
       (if (or (string-contains? name "/") (and is-win? (string-contains? name "\\")))
           (try "")
-          (let loop ((dirs (path-dirs)))
-            (cond ((null? dirs) #f)
-                  ((try (car dirs)) => (lambda (r) r))
-                  (else (loop (cdr dirs)))))))
+          (which name)))
 
     (define scripts-folder (if is-win? "Scripts" "bin"))
 
@@ -794,10 +791,23 @@
                       (lambda () (shell-outs-set! sh saved)))
                     (loop (cdr stages) (get-output-string captured))))))))
 
+    ;; the open redirect ports as (port . path), so that an external
+    ;; program can write to the file itself
+    (define redirect-ports '())
+
     (define (open-redirect sh file append)
       (let ((path (shell-path sh file)))
         (guard (e (#t (println (shell-oute sh) "ERR: cannot open " path) (command-failed!)))
-          (if append (open-output-file path 'append) (open-output-file path)))))
+          (let ((p (if append (open-output-file path 'append) (open-output-file path))))
+            (set! redirect-ports (cons (cons p path) redirect-ports))
+            p))))
+
+    (define (close-redirect p)
+      (set! redirect-ports (filter (lambda (x) (not (eq? (car x) p))) redirect-ports))
+      (close-port p))
+
+    ;; the file an external program can write itself for port p, or #f
+    (define (redirect-path p) (let ((x (assq p redirect-ports))) (and x (cdr x))))
 
     ;; (values outs oute ports-to-close) for the redirects of a stage
     (define (resolve-stage-outputs sh st)
@@ -820,7 +830,7 @@
             (lambda ()
               (shell-outs-set! sh saved-outs)
               (shell-oute-set! sh saved-oute)
-              (for-each close-port to-close))))))
+              (for-each close-redirect to-close))))))
 
     (define (run-stage sh st stdin history ignore-stop-on-error)
       (with-stage-outputs sh st
@@ -834,10 +844,28 @@
       (unless (null? (cdr stages))
         (println (shell-oute sh) "ERR: pipelines cannot be run in the background")
         (command-failed!))
-      ;; a job writes to the redirect file itself (stdout and stderr together)
+      ;; a job writes to the redirect files itself; a file without >> is
+      ;; truncated here, so that all of them can be opened for appending
       (let* ((st (car stages))
-             (file (or (stage-both-file st) (stage-stdout-file st))))
-        (dispatch-stage sh st #f #f (cons command (and file (shell-path sh file))))))
+             (file (lambda (f append)
+                     (let ((path (shell-path sh f)))
+                       (unless append
+                         (guard (e (#t (println (shell-oute sh) "ERR: cannot open " path) (command-failed!)))
+                           (close-port (open-output-file path))))
+                       path)))
+             (opts (cond ((stage-both-file st)
+                          `((stdout ,(file (stage-both-file st) (stage-both-append st)))
+                            (stderr stdout) (append #t)))
+                         (else
+                          (append
+                           (if (stage-stdout-file st)
+                               `((stdout ,(file (stage-stdout-file st) (stage-stdout-append st))))
+                               '())
+                           (if (stage-stderr-file st)
+                               `((stderr ,(file (stage-stderr-file st) (stage-stderr-append st))))
+                               '())
+                           '((append #t)))))))
+        (dispatch-stage sh st #f #f (cons command opts))))
 
     ;; the runner of .scm scripts: (values cmd args)
     (define (resolve-scm-runner sh)
@@ -933,13 +961,29 @@
            (else
             (let* ((argv (cons executable args))
                    (opts `((work-dir ,(shell-cwd sh)) (env ,(child-env sh overlay))))
-                   (direct (and (not stdin) (console-port? (shell-outs sh))
-                                (console-port? (shell-oute sh))))
+                   (outs (shell-outs sh))
+                   (oute (shell-oute sh))
+                   ;; the program writes to the console or to a redirect file
+                   ;; itself (appending: the shell opened and truncated it);
+                   ;; output to anything else is captured
+                   (direct-opts
+                    (lambda (p key)
+                      (cond ((console-port? p) '())
+                            ((redirect-path p)
+                             (flush-output-port p)
+                             `((,key ,(redirect-path p)) (append #t)))
+                            (else #f))))
+                   (out-opts (direct-opts outs 'stdout))
+                   (err-opts (if (and (eq? oute outs) (redirect-path oute))
+                                 '((stderr stdout))
+                                 (direct-opts oute 'stderr)))
+                   (direct (and out-opts err-opts
+                                (append opts (if stdin `((stdin ,stdin)) '()) out-opts err-opts)))
                    (rc
                     ((cooked-wrapper)
                      (lambda ()
                        (if direct
-                           (run-program argv opts)
+                           (run-program argv direct)
                            (let ((r (run-program/capture
                                      argv (if stdin (cons (list 'stdin stdin) opts) opts))))
                              (and r
@@ -1012,9 +1056,12 @@
                            " " (job-command j)))
                 (jobs-reap! sh)))
 
-    (define (start-job sh executable args overlay command log-file)
+    ;; redirects: the start-program options for the job's output files
+    (define (start-job sh executable args overlay command redirects)
       (let* ((opts `((work-dir ,(shell-cwd sh)) (env ,(child-env sh overlay))
-                     ,@(if log-file `((log-file ,log-file)) '())))
+                     ;; Ctrl+C at the terminal is for the foreground program
+                     (new-group #t)
+                     ,@redirects))
              (handle (start-program (cons executable args) opts)))
         (unless handle
           (println (shell-oute sh) "ERR: cannot start " executable)

@@ -16,21 +16,6 @@
     ;; ------------------------------------------------------------------
     ;; Python number formatting
 
-    ;; the exact value of a finite double (exact of dabscm returns the
-    ;; simplest rational, e.g. 1/10 for 0.1, not the binary value)
-    (define (flo->exact x)
-      (let ((bv (make-bytevector 8 0)))
-        (bytevector-ieee-double-set! bv 0 x 'big)
-        (let* ((hi (bytevector-u32-ref bv 0 'big))
-               (lo (bytevector-u32-ref bv 4 'big))
-               (neg (>= hi #x80000000))
-               (bexp (quotient (remainder hi #x80000000) #x100000))
-               (frac (+ (* (remainder hi #x100000) #x100000000) lo))
-               (mag (if (= bexp 0)
-                        (* frac (expt 2 -1074))
-                        (* (+ frac #x10000000000000) (expt 2 (- bexp 1075))))))
-          (if neg (- mag) mag))))
-
     (define (neg-float? x) (or (< x 0) (and (zero? x) (eqv? x -0.0))))
 
     ;; (values m e): positive exact r rounded to p+1 significant digits,
@@ -102,7 +87,7 @@
         (cond ((nan? x) (if up "NAN" "nan"))
               ((infinite? x) (if up "INF" "inf"))
               (else
-               (let* ((r (abs (flo->exact x)))
+               (let* ((r (abs (exact x)))
                       (s (case (char-downcase conv)
                            ((#\f) (fixed-string r p alt))
                            ((#\e) (exp-string r p alt))
@@ -115,7 +100,7 @@
             ((infinite? x) (if (> x 0) "inf" "-inf"))
             ((zero? x) (if (eqv? x -0.0) "-0.0" "0.0"))
             (else
-             (let ((r (abs (flo->exact x)))
+             (let ((r (abs (exact x)))
                    (sign (if (< x 0) "-" "")))
                (let loop ((p 0))
                  (let-values (((m e) (sig-digits r p)))
@@ -283,7 +268,7 @@
                 +nan.0
                 (if (infinite? b)
                     (if (or (zero? a) (eq? (< a 0) (< b 0))) a b)
-                    (let* ((ea (flo->exact a)) (eb (flo->exact b))
+                    (let* ((ea (exact a)) (eb (exact b))
                            (r (- ea (* eb (floor (/ ea eb))))))
                       (if (zero? r) (if (< b 0) -0.0 0.0) (inexact r))))))))
 
@@ -690,9 +675,7 @@
         ((num str) (cadr e))
         ((var) (get-var st (cadr e)))
         ((field) (get-field st (eval-expr st (cadr e))))
-        ((neg) (let ((v (awk-num (eval-expr st (cadr e)))))
-                 ;; (- 0.0) is 0.0 in native dabscm
-                 (if (exact? v) (- v) (* -1.0 v))))
+        ((neg) (- (awk-num (eval-expr st (cadr e)))))
         ((not) (bool->awk (not (awk-truthy? (eval-expr st (cadr e))))))
         ((binop)
          (let ((op (cadr e)))

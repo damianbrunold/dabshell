@@ -443,6 +443,47 @@ apricot" (out t "tcat data.txt | tgrep ap"))
                                 "MISSING"))
         (test-equal #f (env-get (shell-env (tc-shell t)) "env:DABSHELL_TEST_NOPERSIST")))))))
 
+(test-group "external-redirects"
+  (when python
+    (with-shell (lambda (t)
+      (let* ((py (quote-arg python))
+             ;; stdin is read only when piped: else the program has the shell's
+             (prog (string-append py " -c \"import sys; print('o'); print('e', file=sys.stderr)\""))
+             (upper (string-append py " -c \"import sys; print(sys.stdin.read().strip().upper());"
+                                   " print('e', file=sys.stderr)\""))
+             (lines (lambda (name) (splitlines (read-text t name)))))
+        ;; the program writes to the files itself
+        (run-cmd t (string-append prog " > o.txt 2> e.txt"))
+        (test-equal '("o") (lines "o.txt"))
+        (test-equal '("e") (lines "e.txt"))
+        (run-cmd t (string-append prog " >> o.txt 2>> e.txt"))
+        (test-equal '("o" "o") (lines "o.txt"))
+        (test-equal '("e" "e") (lines "e.txt"))
+        (run-cmd t (string-append prog " > o.txt"))
+        (test-equal '("o") (lines "o.txt"))
+        ;; piped input with the output in a file
+        (run-cmd t (string-append "print abc | " upper " > o.txt 2> e.txt"))
+        (test-equal '("ABC") (lines "o.txt"))
+        ;; stdout and stderr in one file
+        (run-cmd t (string-append prog " &> both.txt"))
+        (test-equal '("e" "o") (sort-strings (lines "both.txt")))
+        ;; a background job with separate files
+        (write-file t "be.txt" "old\n")
+        (run-cmd t (string-append prog " > bo.txt 2> be.txt &"))
+        (run-cmd t "wait")
+        (test-equal '("o") (lines "bo.txt"))
+        (test-equal '("e") (lines "be.txt"))
+        ;; appending, and one file for both
+        (write-file t "bo.txt" "old\n")
+        (run-cmd t (string-append prog " >> bo.txt 2> be.txt &"))
+        (run-cmd t "wait")
+        (test-equal '("old" "o") (lines "bo.txt"))
+        (run-cmd t (string-append prog " &> bb.txt &"))
+        (run-cmd t "wait")
+        (test-equal '("e" "o") (sort-strings (lines "bb.txt")))
+        (run-cmd t (string-append prog " &>> bb.txt"))
+        (test-equal '("e" "e" "o" "o") (sort-strings (lines "bb.txt"))))))))
+
 (test-group "bug-fixes"
   (when python
     (with-shell (lambda (t)
