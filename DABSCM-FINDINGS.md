@@ -29,12 +29,3 @@ dabshell still builds such characters with `utf8->string`.
    straightforward SHA-512 in Scheme took 7.7 s/MB native, 15 s/MB on the
    JVM. Less pressing now that (scm crypto) has sha224/sha384/sha512.
    (Not rechecked.)
-
-3. **No UTC offset for a given instant.** `%local-tz-offset` (and with it
-   SRFI 19's `time-utc->date` / `current-date` without a tz-offset) only
-   returns the current offset, so converting a past or future time ignores
-   DST changes. In Europe/Zurich in winter,
-   `(date-hour (time-utc->date (make-time time-utc 0 1751371200)))`
-   (2025-07-01 12:00 UTC) returns 13 instead of 14. dabshell's `ls -l`
-   shows such mtimes an hour off; it passes the instant to `time-utc->date`,
-   so a per-instant offset there would fix it.

@@ -96,9 +96,8 @@
 
     (define (pad2 n) (if (< n 10) (string-append "0" (number->string n)) (number->string n)))
 
-    ;; "YYYY-MM-DD HH:MM:SS" in local time for seconds since the epoch.
-    ;; dabscm's time-utc->date applies the current UTC offset, so times on
-    ;; the other side of a DST change are off by the DST difference.
+    ;; "YYYY-MM-DD HH:MM:SS" in local time for seconds since the epoch
+    ;; (time-utc->date uses the local UTC offset at that time)
     (define (format-local secs)
       (format-utc (+ secs (date-zone-offset (time-utc->date (make-time time-utc 0 secs))))))
 
