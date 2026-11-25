@@ -4,7 +4,8 @@
 ;; tests/test_dabshell.py).
 
 (import (scheme base) (scheme char) (scheme process-context) (scheme time)
-        (scm fs) (scm module) (scm test) (scm zip))
+        (scm fs) (scm module) (scm test) (scm zip)
+        (only (srfi 19) make-time time-utc time-utc->date date->string))
 (define root (directory-name (directory-name (absolute-path (car (command-line))))))
 (module-search-path! (append (list (join-path root "src") (join-path root "tests"))
                              (module-search-path)))
@@ -70,6 +71,9 @@
 
 ;; ── TestLs ──────────────────────────────────────────────────────────────
 
+;; 2001-09-09 01:46:40 UTC in local time
+(define local-1e9 (date->string (time-utc->date (make-time time-utc 0 1000000000)) "~Y-~m-~d ~H:~M:~S"))
+
 (define (with-ls proc)
   (with-shell (lambda (t)
     (write-file t "alpha.txt" "a")
@@ -106,9 +110,9 @@
       (test-equal "ls -l layout" 40 (string-length l))
       (test-equal "ls -l date" #\- (string-ref l 15)))
     (set-file-modification-time! (file-path t "alpha.txt") 1000000000000)
-    (test-equal "ls -l timestamp in UTC" "         1 2001-09-09 01:46:40 alpha.txt"
+    (test-equal "ls -l timestamp in local time" (string-append "         1 " local-1e9 " alpha.txt")
                 (car (filter-lines (out-raw t "ls -l alpha.txt") "alpha.txt")))
-    (test-equal "ls -lh" "    1B 2001-09-09 01:46:40 alpha.txt"
+    (test-equal "ls -lh" (string-append "    1B " local-1e9 " alpha.txt")
                 (car (filter-lines (out-raw t "ls -lh alpha.txt") "alpha.txt")))
     (set-file-modification-time! (file-path t "beta.py") 1000000000000)
     (test-equal "ls -t newest first" "mydir" (car (lines (out t "ls -t"))))

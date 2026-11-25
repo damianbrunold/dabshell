@@ -9,6 +9,7 @@
           (scheme time)
           (srfi 132)
           (srfi 151)
+          (only (srfi 19) make-time time-utc time-utc->date date-zone-offset)
           (scm bytevector)
           (scm crypto)
           (scm fs)
@@ -95,6 +96,12 @@
 
     (define (pad2 n) (if (< n 10) (string-append "0" (number->string n)) (number->string n)))
 
+    ;; "YYYY-MM-DD HH:MM:SS" in local time for seconds since the epoch.
+    ;; dabscm's time-utc->date applies the current UTC offset, so times on
+    ;; the other side of a DST change are off by the DST difference.
+    (define (format-local secs)
+      (format-utc (+ secs (date-zone-offset (time-utc->date (make-time time-utc 0 secs))))))
+
     ;; "YYYY-MM-DD HH:MM:SS" in UTC for seconds since the epoch
     (define (format-utc secs)
       (let* ((days (floor-quotient secs 86400))
@@ -128,7 +135,7 @@
       (let ((s (guard (e (#t #f)) (stat path))))
         (if (and s (cdr (assq 'exists s)))
             (make-ls-entry (path-basename path) path
-                           (format-utc (floor-quotient (cdr (assq 'mtime s)) 1000))
+                           (format-local (floor-quotient (cdr (assq 'mtime s)) 1000))
                            (cdr (assq 'size s)))
             (make-ls-entry (path-basename path) path "" 0))))
 
